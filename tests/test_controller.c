@@ -20,13 +20,17 @@ static uint16_t adc_value = 20480u;
 static uint32_t now;
 static sensor_sample_t sample;
 static unsigned screen, shown;
+static bool leds[3];
+static unsigned led_changes[3];
 enum { SCREEN_T_RH, SCREEN_TEMP, SCREEN_TIME, SCREEN_ERROR, SCREEN_MISSING };
 void hal_heater(bool on) { heater = on; }
 void hal_fan(bool on) { fan = on; }
 void hal_beep(bool on) { beeper = on; }
 void hal_led(unsigned key, bool on) {
-    (void)key;
-    (void)on;
+    CHECK(key < 3u);
+    if (leds[key] != on)
+        ++led_changes[key];
+    leds[key] = on;
 }
 bool hal_key(unsigned key) {
     CHECK(key < 3u);
@@ -73,10 +77,14 @@ static void task(uint32_t t) {
     if (heater)
         CHECK(healthy && adc_good && sample.temperature_x10 < 730);
     if (view()->mode == MODE_OFF)
-        CHECK(!heater && !fan && !light && !beeper);
+        CHECK(!heater && !fan && !light && !beeper && !leds[0] && !leds[1] && !leds[2]);
+    else
+        CHECK(leds[0]);
 }
 static void reset_at(uint32_t t) {
     memset(contacts, 0, sizeof contacts);
+    memset(leds, 0, sizeof leds);
+    memset(led_changes, 0, sizeof led_changes);
     heater = fan = beeper = false;
     light = true;
     healthy = adc_good = true;
@@ -292,6 +300,27 @@ static void test_held_menu_and_fault_latch(void) {
     mode();
     CHECK(view()->error == 3u && !heater);
 }
+static void test_leds_do_not_flicker(void) {
+    uint32_t epoch;
+    unsigned power_changes, mode_changes;
+    ++scenarios;
+    reset_at(0u);
+    CHECK(leds[0] && !leds[1] && !leds[2]);
+    power_changes = led_changes[0];
+    for (unsigned i = 1u; i <= 1000u; ++i)
+        task(i);
+    CHECK(led_changes[0] == power_changes && !leds[1] && !leds[2]);
+    mode();
+    CHECK(leds[1]);
+    mode_changes = led_changes[1];
+    epoch = now;
+    for (unsigned i = 1u; i <= 1000u; ++i)
+        task(epoch + i);
+    CHECK(led_changes[0] == power_changes && led_changes[1] == mode_changes);
+    mode();
+    mode();
+    CHECK(view()->mode == MODE_DRY && leds[0] && !leds[1]);
+}
 int main(void) {
     test_menu();
     test_temperature_and_cutoff();
@@ -300,6 +329,7 @@ int main(void) {
     test_timer_pause_expiry_and_wrap();
     test_menu_timeout_and_bounce();
     test_held_menu_and_fault_latch();
+    test_leds_do_not_flicker();
     printf("controller: %u scenarios, %u checks passed\n", scenarios, checks);
     return 0;
 }

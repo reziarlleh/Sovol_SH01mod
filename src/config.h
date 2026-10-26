@@ -1,6 +1,6 @@
 #ifndef SH01_CONFIG_H
 #define SH01_CONFIG_H
-#define FW_VERSION "1.0.0"
+#define FW_VERSION "1.0.1"
 #define SH01_TEMP_MIN_C 40u
 #define SH01_TEMP_MAX_C 70u
 #define SH01_TEMP_STEP_C 5u

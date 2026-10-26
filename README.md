@@ -1,4 +1,4 @@
-# Sovol_SH01mod 1.0.0
+# Sovol_SH01mod 1.0.1
 
 Прошивка сушилки SOVOL / COMGROW SH01 для заводской платы **G24_V2.1**
 с микроконтроллером **HC32F005C6PA**. Исходники на C, сборка Arm GNU GCC.
@@ -15,7 +15,7 @@
 
 [Управление](docs/USER_GUIDE_RU.md) · [распиновка](docs/HARDWARE_RU.md) ·
 [сборка и прошивка](docs/DEVELOPMENT_RU.md) · [план](docs/ROADMAP_RU.md) ·
-[источники](docs/SOURCES_RU.md).
+[источники](docs/SOURCES_RU.md) · [состояние](docs/STATUS_RU.md).
 
 ```powershell
 .\tools\fetch_tools.ps1
@@ -25,7 +25,7 @@
 python .\tools\audit.py
 ```
 
-Результат: `build/v1.0.0/sovol_sh01mod_v1_0_0.{hex,bin,elf,map}`.
+Результат: `build/v1.0.1/sovol_sh01mod_v1_0_1.{hex,bin,elf,map}`.
 Сборка, тесты на ПК и контроль содержимого Flash подтверждаются отдельно
 от проверки датчика и тепловой работы устройства.
 

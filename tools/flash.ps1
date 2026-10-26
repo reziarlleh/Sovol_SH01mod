@@ -79,7 +79,11 @@ function Assert-XhscProgramLog {
 }
 
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$defaultHex = Join-Path $projectRoot 'build\v1.0.0\sovol_sh01mod_v1_0_0.hex'
+$configText = [IO.File]::ReadAllText((Join-Path $projectRoot 'src/config.h'))
+$versionMatch = [regex]::Match($configText, '#define FW_VERSION "(\d+\.\d+\.\d+)"')
+if (-not $versionMatch.Success) { throw 'Firmware version missing from src/config.h' }
+$version = $versionMatch.Groups[1].Value
+$defaultHex = Join-Path $projectRoot ('build\v' + $version + '\sovol_sh01mod_v' + $version.Replace('.', '_') + '.hex')
 if ([string]::IsNullOrWhiteSpace($HexFile)) {
     $HexFile = $defaultHex
 }

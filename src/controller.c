@@ -31,15 +31,20 @@ static void beep(uint32_t now) {
     beep_until = now + 50u;
     hal_beep(true);
 }
+/* One owner for LED state; LCD refresh must never pulse the button lights. */
+static void update_leds(void) {
+    bool enabled = state.mode != MODE_OFF;
+    hal_led(0u, enabled);
+    hal_led(1u, enabled && (state.mode == MODE_TEMP || state.mode == MODE_TIME || keys[1].stable));
+    hal_led(2u, enabled && keys[2].stable);
+}
 static void off(void) {
     outputs(false, false);
     hal_beep(false);
     beeping = false;
     state.mode = MODE_OFF;
     state.error = 0u;
-    hal_led(0u, false);
-    hal_led(1u, false);
-    hal_led(2u, false);
+    update_leds();
     lcd_enable(false);
 }
 static void fault(uint8_t error, uint32_t now) {
@@ -157,14 +162,13 @@ static void short_key(unsigned key, uint32_t now) {
 }
 static void render(uint32_t now) {
     const sensor_sample_t *s = sensor_get();
+    update_leds();
     if (state.mode == MODE_OFF)
         return;
     if (!dirty && !elapsed(now, last_lcd, 200u))
         return;
     dirty = false;
     last_lcd = now;
-    hal_led(0u, true);
-    hal_led(1u, state.mode == MODE_TEMP || state.mode == MODE_TIME);
     if (state.mode == MODE_FAULT)
         lcd_error(state.error);
     else if (state.mode == MODE_TEMP)
@@ -209,13 +213,13 @@ void controller_task(uint32_t now) {
     unsigned event[3];
     for (i = 0u; i < 3u; ++i) {
         event[i] = key_event(i, now);
-        hal_led(i, keys[i].stable && state.mode != MODE_OFF);
     }
     if (event[0] == 2u) {
         if (state.mode == MODE_OFF) {
             state.mode = MODE_VIEW;
             lcd_enable(true);
             dirty = true;
+            render(now);
         } else
             off();
         return;
