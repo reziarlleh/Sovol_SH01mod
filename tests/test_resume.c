@@ -59,6 +59,10 @@ bool sensor_ok(uint32_t t) {
     return healthy;
 }
 const sensor_sample_t *sensor_get(void) { return &sample; }
+bool sensor_overheated(uint32_t t) {
+    (void)t;
+    return sample.temperature_x10 >= SH01_CHAMBER_FAULT_X10;
+}
 void lcd_enable(bool on) { light = on; }
 void lcd_temperature_humidity(int16_t t, uint16_t rh, bool work) {
     (void)t;
@@ -131,7 +135,8 @@ int main(void) {
     healthy = true;
     reboot();
     CHECK(controller_get()->mode == MODE_VIEW && !heater);
-    printf("resume integration: real controller + journal, checkpoint, cold restart, stop, fault: "
+    printf("resume integration: real controller + journal, checkpoint, cold "
+           "restart, stop, fault: "
            "%u checks passed\n",
            checks);
     return 0;

@@ -10,7 +10,7 @@ typedef struct {
 } key_t;
 static key_t keys[3];
 static controller_state_t state;
-static uint32_t last_second, last_lcd, next_adc, beep_until;
+static uint32_t last_second, last_lcd, next_adc, beep_until, last_screen;
 static uint32_t edit_seconds;
 static uint32_t last_edit;
 static uint8_t edit_target;
@@ -72,15 +72,14 @@ static void fault(uint8_t error, uint32_t now) {
     beep(now);
 }
 static uint8_t safety(uint32_t now) {
-    const sensor_sample_t *s = sensor_get();
     if (!sensor_ok(now))
         return 1u;
     if (!plate_ok || plate_adc >= 37200u || plate_adc < 100u)
         return 2u;
-    if (s->temperature_x10 <= -100)
-        return 3u;
-    if (s->temperature_x10 >= SH01_CHAMBER_FAULT_X10)
+    if (sensor_overheated(now))
         return 4u;
+    if (sensor_get()->temperature_x10 <= -100)
+        return 3u;
     return 0u;
 }
 static void begin_drying(uint32_t now) {
@@ -98,6 +97,7 @@ static void begin_drying(uint32_t now) {
         last_second = now;
         last_checkpoint = now;
         state.time_screen = false;
+        last_screen = now;
         plate_latched = false;
         dirty = true;
     }
@@ -144,6 +144,7 @@ static void short_key(unsigned key, uint32_t now) {
         if (key == 0u) {
             state.mode = state.error == 5u ? MODE_FAULT : MODE_VIEW;
             state.time_screen = false;
+            last_screen = now;
             lcd_enable(true);
             dirty = true;
         }
@@ -157,9 +158,13 @@ static void short_key(unsigned key, uint32_t now) {
             if (safety(now) == 0u && storage_disarm()) {
                 state.error = 0u;
                 state.mode = MODE_VIEW;
+                state.time_screen = false;
+                last_screen = now;
             }
-        } else
+        } else {
             state.time_screen = !state.time_screen;
+            last_screen = now;
+        }
     } else if (key == 1u && state.mode != MODE_FAULT) {
         if (state.mode == MODE_VIEW || state.mode == MODE_DRY) {
             edit_seconds =
@@ -191,10 +196,17 @@ static void short_key(unsigned key, uint32_t now) {
     }
 }
 static void render(uint32_t now) {
-    const sensor_sample_t *s = sensor_get();
     update_leds();
     if (state.mode == MODE_OFF)
         return;
+    if ((state.mode == MODE_VIEW || state.mode == MODE_DRY) &&
+        elapsed(now, last_screen, SH01_SCREEN_INTERVAL_MS)) {
+        uint32_t pages = (uint32_t)(now - last_screen) / SH01_SCREEN_INTERVAL_MS;
+        last_screen += pages * SH01_SCREEN_INTERVAL_MS;
+        if (pages & 1u)
+            state.time_screen = !state.time_screen;
+        dirty = true;
+    }
     if (!dirty && !elapsed(now, last_lcd, 200u))
         return;
     dirty = false;
@@ -207,9 +219,10 @@ static void render(uint32_t now) {
         lcd_time(edit_seconds, true, false);
     else if (state.time_screen)
         lcd_time(state.remaining_s, false, state.mode == MODE_DRY);
-    else if (sensor_ok(now))
+    else if (sensor_ok(now)) {
+        const sensor_sample_t *s = sensor_get();
         lcd_temperature_humidity(s->temperature_x10, s->humidity_x10, state.mode == MODE_DRY);
-    else
+    } else
         lcd_missing();
 }
 void controller_init(uint32_t now) {
@@ -246,7 +259,7 @@ void controller_init(uint32_t now) {
         keys[i].armed = !keys[i].raw;
         keys[i].changed = now;
     }
-    last_second = last_lcd = next_adc = now;
+    last_second = last_lcd = next_adc = last_screen = now;
     dirty = true;
     beeping = false;
     plate_ok = false;
@@ -264,6 +277,7 @@ void controller_task(uint32_t now) {
     if (event[0] == 2u) {
         if (state.mode == MODE_OFF) {
             state.mode = state.error == 5u ? MODE_FAULT : MODE_VIEW;
+            last_screen = now;
             lcd_enable(true);
             dirty = true;
             render(now);
@@ -294,6 +308,7 @@ void controller_task(uint32_t now) {
                 state.mode = MODE_DRY;
                 last_second = last_checkpoint = now;
                 state.time_screen = false;
+                last_screen = now;
                 dirty = true;
             }
         } else if (elapsed(now, resume_started, SH01_RESUME_WAIT_MS)) {
@@ -309,6 +324,7 @@ void controller_task(uint32_t now) {
         else {
             state.mode = MODE_VIEW;
             state.time_screen = false;
+            last_screen = now;
             dirty = true;
         }
     }

@@ -83,13 +83,14 @@ def audit():
             "Static RAM leaves less than 512 bytes for stack")
     required = {"controller_task", "sensor_task", "bus_read", "bus_write",
                 "lcd_temperature_humidity", "lcd_time", "hal_adc", "hal_clock_ok", "hal_heater",
-                "storage_init", "storage_save", "storage_disarm", "Flash_WriteWord", "Flash_SectorErase"}
+                "storage_init", "storage_save", "storage_disarm", "Flash_WriteWord", "Flash_SectorErase",
+                "sensor_overheated"}
     require("firmware_version" in symbols and (VERSION + "\0").encode() in raw, "Embedded version missing")
     require(required <= symbols.keys(), "SH01 modules missing")
     forbidden = {"delay10us", "delay100us", "delay1ms"}
     require(not forbidden & symbols.keys(), "Destructive clock delay included")
-    require(not any(name.startswith(("sht4", "profile_")) for name in symbols) and
-            "Flash_ChipErase" not in symbols, "Unexpected profiles/SHT/chip erase included")
+    require(not any(name.startswith("profile_") for name in symbols) and
+            "Flash_ChipErase" not in symbols, "Unexpected profiles/chip erase included")
     linker_map = paths["map"].read_text(encoding="utf-8")
     sources = sorted((ROOT / "src").glob("*.[ch]"))
     for path in sources:
@@ -113,6 +114,8 @@ def audit():
         "systick": f"0x{tick:08X}", "static_ram_bytes": symbols["_ebss"][0] - 0x20000000,
         "remaining_ram_above_bss": sp - symbols["_ebss"][0],
         "heater_control_included": True, "persistent_resume_included": True,
+        "primary_sensor": "SHT4x", "reserve_sensor": "AHT20",
+        "independent_camera_overheat_checks": True,
         "journal_base": "0x7000", "journal_bytes": 4096,
         "duration_presets_h": presets,
         "hardware_functional_acceptance": False, "thermal_acceptance": False,

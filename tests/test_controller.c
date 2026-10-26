@@ -17,6 +17,7 @@ static unsigned checks, scenarios;
         }                                                                                          \
     } while (0)
 static bool contacts[3], heater, fan, light = true, beeper, healthy = true, adc_good = true;
+static bool reserve_hot;
 static uint16_t adc_value = 20480u;
 static uint32_t now;
 static sensor_sample_t sample;
@@ -71,6 +72,10 @@ bool sensor_ok(uint32_t t) {
     return healthy;
 }
 const sensor_sample_t *sensor_get(void) { return &sample; }
+bool sensor_overheated(uint32_t t) {
+    (void)t;
+    return reserve_hot || sample.temperature_x10 >= SH01_CHAMBER_FAULT_X10;
+}
 void lcd_enable(bool on) { light = on; }
 void lcd_temperature_humidity(int16_t t, uint16_t h, bool work) {
     (void)h;
@@ -117,6 +122,7 @@ static void reset_at(uint32_t t) {
     heater = fan = beeper = false;
     light = true;
     healthy = adc_good = true;
+    reserve_hot = false;
     adc_value = 20480u;
     sample = (sensor_sample_t){0};
     sample.temperature_x10 = 270;
@@ -220,6 +226,11 @@ static void test_plate_hysteresis_and_faults(void) {
     mode();
     mode();
     CHECK(view()->error == 2u && !heater);
+    reset_at(0u);
+    start();
+    reserve_hot = true; /* Stock reserve trips even with a cool primary. */
+    task(now + 10u);
+    CHECK(view()->error == 4u && !heater && !fan && !persisted.running);
 }
 static void test_off_wake_and_boot_hold(void) {
     uint32_t press;

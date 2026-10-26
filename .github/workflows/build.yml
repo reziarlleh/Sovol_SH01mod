@@ -35,18 +35,18 @@ jobs:
           key: llvm-mingw-windows-fd5462b7f5d93b2ff981fcd3f9c7e427
       - name: Prepare pinned C test compiler
         run: .\tools\prepare_host_tests.ps1
-      - name: Run six C suites including storage and resume
+      - name: Run seven C suites including dual sensors and resume
         run: .\tools\test.ps1
       - name: Audit ARM artifacts
         run: python .\tools\audit.py
       - name: Verify reproducible HEX and BIN
         run: |
           $expected = @{
-            'bin' = '347ce7b13b3b8a7ad02b30c243c0e8ed948a4bad796147526f88302bb7d34fe7'
-            'hex' = '47c4309ac555ec06ed3df63bfbf772a65a167f5835077a1eb51a08a9a8f182ca'
+            'bin' = 'a7ade85f0b86b7d7ab70ba3eac465a18151c0ddb04e427a490166e0f0cb1190c'
+            'hex' = '6d0ca4267057774d648ac9dca5eeb0418b4fbd4cf06b42b7ba6066392b1e60a0'
           }
           foreach ($ext in $expected.Keys) {
-            $path = "build/v1.1.0/sovol_sh01mod_v1_1_0.$ext"
+            $path = "build/v1.2.0/sovol_sh01mod_v1_2_0.$ext"
             if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expected[$ext]) {
               throw "Application SHA256 mismatch: $path"
             }
@@ -54,12 +54,12 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: sovol-sh01mod-1.1.0
+          name: sovol-sh01mod-1.2.0
           if-no-files-found: error
           retention-days: 30
           path: |
-            build/v1.1.0/*.hex
-            build/v1.1.0/*.bin
-            build/v1.1.0/*.elf
-            build/v1.1.0/*.map
-            build/v1.1.0/*.audit.json
+            build/v1.2.0/*.hex
+            build/v1.2.0/*.bin
+            build/v1.2.0/*.elf
+            build/v1.2.0/*.map
+            build/v1.2.0/*.audit.json

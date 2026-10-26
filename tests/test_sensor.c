@@ -17,6 +17,8 @@ static bool nack, always_busy, bad_frame, calibration_stuck, calibrated = true;
 void bus_recover(void) { ++recoveries; }
 bus_error_t bus_last_error(void) { return nack ? BUS_ADDRESS_NACK : BUS_OK; }
 bool bus_write(uint8_t addr, const uint8_t *bytes, size_t length) {
+    if (addr >= 0x44u && addr <= 0x46u)
+        return false; /* This regression fixture has only its stock AHT20. */
     CHECK(addr == 0x38u && length == 3u);
     if (nack)
         return false;
@@ -36,6 +38,8 @@ bool bus_write(uint8_t addr, const uint8_t *bytes, size_t length) {
     return true;
 }
 bool bus_read(uint8_t addr, uint8_t *bytes, size_t length) {
+    if (addr >= 0x44u && addr <= 0x46u)
+        return false;
     CHECK(addr == 0x38u && (length == 1u || length == 6u));
     if (nack)
         return false;
@@ -112,7 +116,8 @@ int main(void) {
     reset(0xFFFFFE00u);
     run(0xFFFFFE00u, 800u);
     CHECK(sensor_ok(now) && frames == 1u);
-    printf("sensor: delayed calibration, BUSY, frame, NACK, timeout, stale, rollover: %u "
+    printf("sensor: delayed calibration, BUSY, frame, NACK, timeout, stale, "
+           "rollover: %u "
            "checks passed\n",
            checks);
     return 0;
