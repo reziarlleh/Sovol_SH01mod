@@ -27,7 +27,7 @@ def decode_hex(path):
         if kind == 0:
             for index, value in enumerate(payload):
                 target = upper + address + index
-                require(0 <= target < 0x7C00, "HEX overlaps reserved journal/outside Flash")
+                require(0 <= target < 0x7000, "HEX overlaps reserved journal/outside Flash")
                 require(target not in image, "Overlapping HEX data")
                 image[target] = value
         elif kind == 1:
@@ -58,7 +58,7 @@ def audit():
     paths = {ext: FOLDER / f"{STEM}.{ext}" for ext in ("hex", "bin", "elf", "map")}
     raw = paths["bin"].read_bytes()
     require(raw == decode_hex(paths["hex"]), "HEX/BIN mismatch")
-    require(192 <= len(raw) < 0x7C00, "Flash overflow")
+    require(192 <= len(raw) < 0x7000, "Flash overflow")
     sp, reset = struct.unpack_from("<II", raw)
     require(sp == 0x20001000, "Stack vector")
     require(reset & 1 and reset & ~1 < len(raw), "Reset vector")
@@ -82,13 +82,14 @@ def audit():
     require(0x20000000 <= symbols["_sbss"][0] <= symbols["_ebss"][0] <= sp - 512,
             "Static RAM leaves less than 512 bytes for stack")
     required = {"controller_task", "sensor_task", "bus_read", "bus_write",
-                "lcd_temperature_humidity", "lcd_time", "hal_adc", "hal_clock_ok", "hal_heater"}
+                "lcd_temperature_humidity", "lcd_time", "hal_adc", "hal_clock_ok", "hal_heater",
+                "storage_init", "storage_save", "storage_disarm", "Flash_WriteWord", "Flash_SectorErase"}
     require("firmware_version" in symbols and (VERSION + "\0").encode() in raw, "Embedded version missing")
     require(required <= symbols.keys(), "SH01 modules missing")
     forbidden = {"delay10us", "delay100us", "delay1ms"}
     require(not forbidden & symbols.keys(), "Destructive clock delay included")
-    require(not any(name.startswith(("Flash_", "sht4", "storage_", "profile_")) for name in symbols),
-            "SH01 unexpectedly includes persistence/profiles/SHT/Flash writes")
+    require(not any(name.startswith(("sht4", "profile_")) for name in symbols) and
+            "Flash_ChipErase" not in symbols, "Unexpected profiles/SHT/chip erase included")
     linker_map = paths["map"].read_text(encoding="utf-8")
     sources = sorted((ROOT / "src").glob("*.[ch]"))
     for path in sources:
@@ -98,16 +99,22 @@ def audit():
                      for p in sources}
     config = (ROOT / "src/config.h").read_text(encoding="utf-8")
     for key, value in (("TEMP_MAX_C", "70u"), ("CHAMBER_FAULT_X10", "730"),
-                       ("TIME_MIN_H", "6u"), ("TIME_MAX_H", "12u")):
+                       ("TIME_MIN_H", "6u"), ("TIME_MAX_H", "96u")):
         require(re.search(r"^#define SH01_" + key + r"\s+" + value + r"$", config, re.M),
                 f"SH01 config mismatch: {key}")
+    presets = [6, 8, 10, 12, 18, 24, 32, 48, 72, 96]
+    preset_address = symbols["time_presets_h"][0]
+    require(raw[preset_address:preset_address+len(presets)] == bytes(presets),
+            "Compiled duration presets differ from the requested list")
     result = {
         "ok": True, "version": VERSION, "editable_c_source": True,
         "oem_binary_required_for_build": False, "application_bytes": len(raw),
         "last_address": f"0x{len(raw)-1:08X}", "reset": f"0x{reset:08X}",
         "systick": f"0x{tick:08X}", "static_ram_bytes": symbols["_ebss"][0] - 0x20000000,
         "remaining_ram_above_bss": sp - symbols["_ebss"][0],
-        "heater_control_included": True, "flash_writing_code_absent": True,
+        "heater_control_included": True, "persistent_resume_included": True,
+        "journal_base": "0x7000", "journal_bytes": 4096,
+        "duration_presets_h": presets,
         "hardware_functional_acceptance": False, "thermal_acceptance": False,
         "artifacts": {ext: {"bytes": p.stat().st_size,
                             "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}

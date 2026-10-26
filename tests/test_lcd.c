@@ -67,6 +67,12 @@ int main(void) {
     lcd_time(6u * 3600u, true, false);
     CHECK(digit(0) == 0x3Fu && digit(1) == 0x7Du && digit(2) == 0x3Fu && digit(3) == 0x3Fu &&
           ram[15] == 3u);
+    lcd_time(96u * 3600u, true, false);
+    CHECK(digit(0) == 0x6Fu && digit(1) == 0x7Du && digit(2) == 0x3Fu && digit(3) == 0x3Fu &&
+          ram[15] == 3u);
+    lcd_time(96u * 3600u - 60u, false, true);
+    CHECK(digit(0) == 0x6Fu && digit(1) == 0x6Du && digit(2) == 0x6Du && digit(3) == 0x6Fu &&
+          ram[15] == 1u && ram[14] == 8u);
     lcd_missing();
     for (unsigned i = 0; i < 4u; ++i)
         CHECK(digit(i) == 0x40u);

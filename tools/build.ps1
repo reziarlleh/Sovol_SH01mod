@@ -72,7 +72,9 @@ $applicationSources = @(
     'src\bus.c',
     'src\sensor.c',
     'src\lcd.c',
-    'src\controller.c'
+    'src\controller.c',
+    'src\storage.c',
+    'src\flash_hal.c'
 )
 $vendorSources = @(
     'vendor\HC32F005_DDL_Rev2.0.0\driver\src\ddl.c',
@@ -80,6 +82,7 @@ $vendorSources = @(
     'vendor\HC32F005_DDL_Rev2.0.0\driver\src\gpio.c',
     'vendor\HC32F005_DDL_Rev2.0.0\driver\src\adc.c',
     'vendor\HC32F005_DDL_Rev2.0.0\driver\src\wdt.c',
+    'vendor\HC32F005_DDL_Rev2.0.0\driver\src\flash.c',
     'vendor\HC32F005_DDL_Rev2.0.0\mcu\common\system_hc32f005.c'
 )
 $supportSources = @($startup, $runtime)

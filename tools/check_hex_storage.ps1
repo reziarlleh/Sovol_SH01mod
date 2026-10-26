@@ -11,7 +11,7 @@ if (-not (Test-Path -LiteralPath $HexFile -PathType Leaf)) {
     Fail ("HEX file not found: {0}" -f $HexFile)
 }
 
-$limit = [int64]0x7C00
+$limit = [int64]0x7000
 $upper = [int64]0
 $maxAddr = [int64]-1
 $dataRecordCount = 0
@@ -53,7 +53,7 @@ foreach ($rawLine in (Get-Content -LiteralPath $HexFile)) {
             if ($end -gt $maxAddr) { $maxAddr = $end }
             ++$dataRecordCount
             if ($end -ge $limit) {
-                Fail ("HEX reaches storage area 0x7C00..0x7FFF at line {0}" -f $lineNumber)
+                Fail ("HEX reaches storage area 0x7000..0x7FFF at line {0}" -f $lineNumber)
             }
         }
         1 {
@@ -82,4 +82,4 @@ if (-not $eofSeen) { Fail "missing EOF record" }
 if ($dataRecordCount -eq 0) { Fail "HEX contains no programmed data records" }
 
 Write-Host ("Highest programmed address: 0x{0:X8}" -f [uint64]$maxAddr)
-Write-Host "OK: HEX structure/checksums are valid and storage area 0x7C00..0x7FFF is not occupied by the application."
+Write-Host "OK: HEX structure/checksums are valid and storage area 0x7000..0x7FFF is not occupied by the application."

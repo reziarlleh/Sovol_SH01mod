@@ -3,6 +3,7 @@
 #include "hal.h"
 #include "lcd.h"
 #include "sensor.h"
+#include "storage.h"
 typedef struct {
     bool raw, stable, armed, long_sent;
     uint32_t changed, pressed;
@@ -15,7 +16,19 @@ static uint32_t last_edit;
 static uint8_t edit_target;
 static bool time_changed;
 static bool dirty, beeping, plate_ok, plate_latched;
+static bool resume_pending;
+static uint32_t resume_started, last_checkpoint;
 static uint16_t plate_adc;
+static const uint8_t time_presets_h[] = {SH01_TIME_PRESET_VALUES};
+/* While editing a running cycle, choose the next offered duration above the
+ * remaining time, including a partial hour; the last preset wraps to six. */
+static uint8_t next_time_hours(uint32_t seconds) {
+    unsigned i;
+    for (i = 0u; i < sizeof time_presets_h / sizeof time_presets_h[0]; ++i)
+        if ((uint32_t)time_presets_h[i] * 3600u > seconds)
+            return time_presets_h[i];
+    return SH01_TIME_MIN_H;
+}
 static bool elapsed(uint32_t now, uint32_t since, uint32_t interval) {
     return (uint32_t)(now - since) >= interval;
 }
@@ -40,15 +53,19 @@ static void update_leds(void) {
 }
 static void off(void) {
     outputs(false, false);
+    resume_pending = false;
     hal_beep(false);
     beeping = false;
     state.mode = MODE_OFF;
-    state.error = 0u;
+    state.error = storage_disarm() ? 0u : 5u;
     update_leds();
     lcd_enable(false);
 }
 static void fault(uint8_t error, uint32_t now) {
     outputs(false, false);
+    resume_pending = false;
+    if (!storage_disarm())
+        error = 5u;
     state.error = error;
     state.mode = MODE_FAULT;
     dirty = true;
@@ -71,9 +88,15 @@ static void begin_drying(uint32_t now) {
     if (error)
         fault(error, now);
     else {
+        storage_cycle_t cycle = {edit_seconds, state.target_c, state.hours, true};
+        if (!storage_save(&cycle)) {
+            fault(5u, now);
+            return;
+        }
         state.mode = MODE_DRY;
         state.remaining_s = edit_seconds;
         last_second = now;
+        last_checkpoint = now;
         state.time_screen = false;
         plate_latched = false;
         dirty = true;
@@ -110,9 +133,16 @@ static unsigned key_event(unsigned id, uint32_t now) {
     return event;
 }
 static void short_key(unsigned key, uint32_t now) {
+    if (resume_pending) {
+        resume_pending = false;
+        if (!storage_disarm()) {
+            fault(5u, now);
+            return;
+        }
+    }
     if (state.mode == MODE_OFF) {
         if (key == 0u) {
-            state.mode = MODE_VIEW;
+            state.mode = state.error == 5u ? MODE_FAULT : MODE_VIEW;
             state.time_screen = false;
             lcd_enable(true);
             dirty = true;
@@ -124,7 +154,7 @@ static void short_key(unsigned key, uint32_t now) {
     last_edit = now;
     if (key == 0u) {
         if (state.mode == MODE_FAULT) {
-            if (safety(now) == 0u) {
+            if (safety(now) == 0u && storage_disarm()) {
                 state.error = 0u;
                 state.mode = MODE_VIEW;
             }
@@ -137,6 +167,10 @@ static void short_key(unsigned key, uint32_t now) {
             edit_target = state.target_c;
             time_changed = false;
             outputs(false, false);
+            if (state.mode == MODE_DRY && !storage_disarm()) {
+                fault(5u, now);
+                return;
+            }
             state.mode = MODE_TEMP;
         } else if (state.mode == MODE_TEMP) {
             state.target_c = edit_target;
@@ -150,12 +184,8 @@ static void short_key(unsigned key, uint32_t now) {
                               ? SH01_TEMP_MIN_C
                               : (uint8_t)(edit_target + SH01_TEMP_STEP_C);
         else if (state.mode == MODE_TIME) {
-            uint32_t hours = edit_seconds / 3600u;
-            hours = hours >= SH01_TIME_MAX_H ? SH01_TIME_MIN_H : hours + 1u;
-            if (hours < SH01_TIME_MIN_H)
-                hours = SH01_TIME_MIN_H;
-            state.hours = (uint8_t)hours;
-            edit_seconds = hours * 3600u;
+            state.hours = next_time_hours(edit_seconds);
+            edit_seconds = (uint32_t)state.hours * 3600u;
             time_changed = true;
         }
     }
@@ -184,11 +214,28 @@ static void render(uint32_t now) {
 }
 void controller_init(uint32_t now) {
     unsigned i;
+    storage_cycle_t restored;
     state = (controller_state_t){0};
     state.mode = MODE_VIEW;
     state.target_c = SH01_TEMP_MIN_C;
     state.hours = SH01_TIME_MIN_H;
     state.remaining_s = (uint32_t)state.hours * 3600u;
+    storage_init();
+    resume_pending = false;
+    if (storage_load(&restored)) {
+        state.target_c = restored.target_c;
+        state.hours = restored.hours;
+        state.remaining_s =
+            restored.running ? restored.remaining_s : (uint32_t)restored.hours * 3600u;
+        resume_pending = restored.running;
+    } else {
+        storage_cycle_t defaults = {state.remaining_s, state.target_c, state.hours, false};
+        if (!storage_save(&defaults)) {
+            state.mode = MODE_FAULT;
+            state.error = 5u;
+        }
+    }
+    resume_started = last_checkpoint = now;
     edit_seconds = state.remaining_s;
     edit_target = state.target_c;
     time_changed = false;
@@ -216,7 +263,7 @@ void controller_task(uint32_t now) {
     }
     if (event[0] == 2u) {
         if (state.mode == MODE_OFF) {
-            state.mode = MODE_VIEW;
+            state.mode = state.error == 5u ? MODE_FAULT : MODE_VIEW;
             lcd_enable(true);
             dirty = true;
             render(now);
@@ -237,6 +284,22 @@ void controller_task(uint32_t now) {
             short_key(i, now);
             break;
         }
+    if (resume_pending) {
+        if (plate_ok && sensor_ok(now)) {
+            uint8_t error = safety(now);
+            resume_pending = false;
+            if (error)
+                fault(error, now);
+            else {
+                state.mode = MODE_DRY;
+                last_second = last_checkpoint = now;
+                state.time_screen = false;
+                dirty = true;
+            }
+        } else if (elapsed(now, resume_started, SH01_RESUME_WAIT_MS)) {
+            fault(safety(now), now);
+        }
+    }
     /* Menu timeout: abandoned TEMP/TIME returns to view;
      * changing TIME permits automatic start after five seconds. */
     if ((state.mode == MODE_TEMP || state.mode == MODE_TIME) &&
@@ -263,6 +326,15 @@ void controller_task(uint32_t now) {
         if (!state.remaining_s) {
             off();
             return;
+        }
+        if (elapsed(now, last_checkpoint, SH01_CHECKPOINT_MS)) {
+            storage_cycle_t cycle = {state.remaining_s, state.target_c, state.hours, true};
+            if (!storage_save(&cycle)) {
+                fault(5u, now);
+                render(now);
+                return;
+            }
+            last_checkpoint = now;
         }
         if (plate_adc < SH01_PLATE_OFF_ADC_X10)
             plate_latched = true;
