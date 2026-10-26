@@ -23,4 +23,5 @@ const sensor_sample_t *sensor_get(void);
 bool sensor_ok(uint32_t now);
 sensor_source_t sensor_source(void);
 bool sensor_overheated(uint32_t now);
+bool sensor_primary_fault(uint32_t now);
 #endif

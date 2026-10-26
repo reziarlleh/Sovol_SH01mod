@@ -63,6 +63,10 @@ bool sensor_overheated(uint32_t t) {
     (void)t;
     return sample.temperature_x10 >= SH01_CHAMBER_FAULT_X10;
 }
+bool sensor_primary_fault(uint32_t t) {
+    (void)t;
+    return false;
+}
 void lcd_enable(bool on) { light = on; }
 void lcd_temperature_humidity(int16_t t, uint16_t rh, bool work) {
     (void)t;

@@ -122,6 +122,8 @@ static sht_state_t sht_state;
 static sensor_sample_t sht_sample;
 static uint32_t sht_due;
 static uint8_t sht_address;
+static uint8_t sht_good_frames;
+static bool aht_paused;
 static const sensor_sample_t *selected;
 static sensor_source_t source;
 
@@ -144,6 +146,7 @@ static bool sht_frame(uint8_t *frame) {
 static bool sht_command(uint8_t command) { return bus_write(sht_address, &command, 1u); }
 static void sht_next_address(uint32_t now) {
     sht_sample.ready = false;
+    sht_good_frames = 0u;
     sht_state = SHT_SCAN;
     if (sht_address == 0x46u) {
         sht_address = 0x44u;
@@ -154,10 +157,11 @@ static void sht_next_address(uint32_t now) {
     }
 }
 static void sht_failed(uint32_t now) {
-    sht_sample.ready = false;
+    sht_good_frames = 0u;
     if (sht_sample.failures < 255u)
         ++sht_sample.failures;
-    if (sht_sample.failures >= 3u) {
+    if (sht_sample.failures >= SH01_SENSOR_CONFIRM_FRAMES) {
+        sht_sample.ready = false;
         sht_address = 0x44u;
         sht_state = SHT_SCAN;
     } else
@@ -219,18 +223,26 @@ static void sht_task(uint32_t now) {
         sht_sample.last_good_ms = now;
         sht_sample.ready = true;
         sht_sample.failures = 0u;
+        if (sht_good_frames < SH01_SENSOR_CONFIRM_FRAMES)
+            ++sht_good_frames;
         sht_state = SHT_IDLE;
         sht_due = now + SH01_SENSOR_PERIOD_MS;
         break;
     }
 }
 static void select_source(uint32_t now) {
-    if (usable(&sht_sample, now)) {
+    bool primary_ok = usable(&sht_sample, now), reserve_ok = usable(&aht_sample, now);
+    if (!primary_ok)
+        sht_good_frames = 0u;
+    /* A fresh previous primary frame bridges one bad transfer. Once on the
+     * reserve, require consecutive good primary frames before returning. */
+    if (primary_ok &&
+        (source != SENSOR_AHT20 || !reserve_ok || sht_good_frames >= SH01_SENSOR_CONFIRM_FRAMES)) {
         selected = &sht_sample;
         source = SENSOR_SHT4X;
     } else {
         selected = &aht_sample;
-        source = usable(&aht_sample, now) ? SENSOR_AHT20 : SENSOR_NONE;
+        source = reserve_ok ? SENSOR_AHT20 : SENSOR_NONE;
     }
 }
 void sensor_init(uint32_t now) {
@@ -239,12 +251,28 @@ void sensor_init(uint32_t now) {
     sht_address = 0x44u;
     sht_state = SHT_SCAN;
     sht_due = now + 100u;
+    sht_good_frames = 0u;
+    aht_paused = false;
+    source = SENSOR_NONE;
     select_source(now);
     bus_recover();
 }
 void sensor_task(uint32_t now) {
-    aht_task(now);
     sht_task(now);
+    bool need_reserve =
+        source != SENSOR_SHT4X || sht_sample.failures != 0u || !usable(&sht_sample, now);
+    if (need_reserve) {
+        if (aht_paused) {
+            /* Discard a conversion that may have completed before pausing:
+             * it must never acquire a fresh timestamp hours later. */
+            aht_init(now);
+            aht_paused = false;
+        }
+        aht_task(now);
+    } else {
+        aht_sample.ready = false;
+        aht_paused = true;
+    }
     select_source(now);
 }
 const sensor_sample_t *sensor_get(void) { return selected; }
@@ -254,6 +282,10 @@ bool sensor_ok(uint32_t now) {
 }
 sensor_source_t sensor_source(void) { return source; }
 bool sensor_overheated(uint32_t now) {
-    return (usable(&sht_sample, now) && sht_sample.temperature_x10 >= SH01_CHAMBER_FAULT_X10) ||
-           (usable(&aht_sample, now) && aht_sample.temperature_x10 >= SH01_CHAMBER_FAULT_X10);
+    select_source(now);
+    return source != SENSOR_NONE && selected->temperature_x10 >= SH01_CHAMBER_FAULT_X10;
+}
+bool sensor_primary_fault(uint32_t now) {
+    select_source(now);
+    return source == SENSOR_AHT20 || sht_sample.failures != 0u;
 }

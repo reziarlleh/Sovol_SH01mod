@@ -84,7 +84,7 @@ def audit():
     required = {"controller_task", "sensor_task", "bus_read", "bus_write",
                 "lcd_temperature_humidity", "lcd_time", "hal_adc", "hal_clock_ok", "hal_heater",
                 "storage_init", "storage_save", "storage_disarm", "Flash_WriteWord", "Flash_SectorErase",
-                "sensor_overheated"}
+                "sensor_overheated", "sensor_primary_fault"}
     require("firmware_version" in symbols and (VERSION + "\0").encode() in raw, "Embedded version missing")
     require(required <= symbols.keys(), "SH01 modules missing")
     forbidden = {"delay10us", "delay100us", "delay1ms"}
@@ -115,7 +115,9 @@ def audit():
         "remaining_ram_above_bss": sp - symbols["_ebss"][0],
         "heater_control_included": True, "persistent_resume_included": True,
         "primary_sensor": "SHT4x", "reserve_sensor": "AHT20",
-        "independent_camera_overheat_checks": True,
+        "active_camera_overheat_check": True, "independent_plate_ntc": True,
+        "primary_recovery_good_frames": 3, "reserve_unused_with_healthy_primary": True,
+        "error_view_ms": 5000, "power_error_blink_half_period_ms": 500,
         "journal_base": "0x7000", "journal_bytes": 4096,
         "duration_presets_h": presets,
         "hardware_functional_acceptance": False, "thermal_acceptance": False,

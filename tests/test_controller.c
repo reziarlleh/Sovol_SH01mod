@@ -17,7 +17,7 @@ static unsigned checks, scenarios;
         }                                                                                          \
     } while (0)
 static bool contacts[3], heater, fan, light = true, beeper, healthy = true, adc_good = true;
-static bool reserve_hot;
+static bool primary_fault;
 static uint16_t adc_value = 20480u;
 static uint32_t now;
 static sensor_sample_t sample;
@@ -74,7 +74,11 @@ bool sensor_ok(uint32_t t) {
 const sensor_sample_t *sensor_get(void) { return &sample; }
 bool sensor_overheated(uint32_t t) {
     (void)t;
-    return reserve_hot || sample.temperature_x10 >= SH01_CHAMBER_FAULT_X10;
+    return sample.temperature_x10 >= SH01_CHAMBER_FAULT_X10;
+}
+bool sensor_primary_fault(uint32_t t) {
+    (void)t;
+    return primary_fault;
 }
 void lcd_enable(bool on) { light = on; }
 void lcd_temperature_humidity(int16_t t, uint16_t h, bool work) {
@@ -109,7 +113,8 @@ static void task(uint32_t t) {
         CHECK(healthy && adc_good && sample.temperature_x10 < 730);
     if (view()->mode == MODE_OFF)
         CHECK(!heater && !fan && !light && !beeper && !leds[0] && !leds[1] && !leds[2]);
-    else
+    else if (view()->error == 0u && healthy && adc_good && !primary_fault &&
+             sample.temperature_x10 > -100 && sample.temperature_x10 < 730)
         CHECK(leds[0]);
 }
 static void reset_at(uint32_t t) {
@@ -122,7 +127,7 @@ static void reset_at(uint32_t t) {
     heater = fan = beeper = false;
     light = true;
     healthy = adc_good = true;
-    reserve_hot = false;
+    primary_fault = false;
     adc_value = 20480u;
     sample = (sensor_sample_t){0};
     sample.temperature_x10 = 270;
@@ -171,8 +176,8 @@ static void test_menu(void) {
     mode();
     CHECK(view()->mode == MODE_DRY && heater && fan);
     click(0u);
-    CHECK(screen == SCREEN_TIME);
-    click(0u);
+    CHECK(screen == SCREEN_ERROR && shown == 0u && view()->mode == MODE_DRY && heater);
+    task(now + SH01_ERROR_VIEW_MS);
     CHECK(screen == SCREEN_T_RH);
 }
 static void test_temperature_and_cutoff(void) {
@@ -195,7 +200,9 @@ static void test_temperature_and_cutoff(void) {
     CHECK(view()->mode == MODE_DRY);
     sample.temperature_x10 = 730;
     task(now + 250u);
-    CHECK(view()->mode == MODE_FAULT && view()->error == 4u && screen == SCREEN_ERROR);
+    CHECK(view()->mode == MODE_FAULT && view()->error == 4u && screen != SCREEN_ERROR);
+    click(0u);
+    CHECK(screen == SCREEN_ERROR && shown == 4u && view()->mode == MODE_FAULT);
 }
 static void test_plate_hysteresis_and_faults(void) {
     ++scenarios;
@@ -228,9 +235,9 @@ static void test_plate_hysteresis_and_faults(void) {
     CHECK(view()->error == 2u && !heater);
     reset_at(0u);
     start();
-    reserve_hot = true; /* Stock reserve trips even with a cool primary. */
+    primary_fault = true; /* Reserve warning alone does not stop a valid source. */
     task(now + 10u);
-    CHECK(view()->error == 4u && !heater && !fan && !persisted.running);
+    CHECK(view()->error == 0u && heater && fan && persisted.running);
 }
 static void test_off_wake_and_boot_hold(void) {
     uint32_t press;
@@ -333,7 +340,9 @@ static void test_held_menu_and_fault_latch(void) {
     task(now + 1000u);
     CHECK(view()->mode == MODE_FAULT && !heater);
     click(0u);
-    CHECK(view()->mode == MODE_VIEW && !heater);
+    CHECK(view()->mode == MODE_FAULT && screen == SCREEN_ERROR && shown == 1u && !heater);
+    mode();
+    CHECK(view()->mode == MODE_TEMP && !heater);
     reset_at(0u);
     sample.temperature_x10 = -100;
     mode();
@@ -488,6 +497,66 @@ static void test_restore_wait_fault_and_save_failure(void) {
     task(0u);
     CHECK(view()->mode == MODE_VIEW && !heater);
 }
+static void test_error_led_and_power_view(void) {
+    ++scenarios;
+    reset_at(0u);
+    start();
+    primary_fault = true;
+    uint32_t at = now + 1u;
+    task(at);
+    CHECK(leds[0] && heater && fan);
+    task(at + 499u);
+    CHECK(leds[0]);
+    task(at + 500u);
+    CHECK(!leds[0] && heater && fan);
+    task(at + 1000u);
+    CHECK(leds[0]);
+    click(0u);
+    at = now;
+    uint32_t remaining = view()->remaining_s;
+    CHECK(screen == SCREEN_ERROR && shown == 6u && view()->mode == MODE_DRY);
+    task(at + 4999u);
+    CHECK(screen == SCREEN_ERROR && shown == 6u && heater);
+    task(at + 5000u);
+    CHECK(screen != SCREEN_ERROR && view()->remaining_s == remaining - 5u && heater);
+    primary_fault = false;
+    task(now + 1u);
+    CHECK(leds[0]);
+    click(0u);
+    CHECK(screen == SCREEN_ERROR && shown == 0u && heater);
+    /* A later fatal fault replaces the open E0 view and cannot be dismissed
+     * or restarted by the diagnostic POWER press. */
+    adc_good = false;
+    primary_fault = true;
+    task(now + 250u);
+    CHECK(view()->mode == MODE_FAULT && view()->error == 2u && !heater && shown == 2u);
+    click(0u);
+    CHECK(shown == 6u && view()->mode == MODE_FAULT);
+    click(0u);
+    CHECK(shown == 2u && view()->mode == MODE_FAULT);
+    mode();
+    CHECK(view()->mode == MODE_FAULT && !heater);
+    task(now + 5000u);
+    CHECK(screen != SCREEN_ERROR && view()->mode == MODE_FAULT && !heater);
+    adc_good = true;
+    primary_fault = false;
+    task(now + 250u);
+    click(0u);
+    CHECK(shown == 2u && view()->mode == MODE_FAULT); /* Latched trip remains. */
+    mode();
+    CHECK(view()->mode == MODE_TEMP && !heater);
+    mode();
+    mode();
+    CHECK(view()->mode == MODE_DRY && heater && view()->error == 0u);
+    /* Blink/view deadlines remain valid across the millisecond wrap. */
+    reset_at(0xFFFFFF00u);
+    primary_fault = true;
+    task(now + 1u);
+    click(0u);
+    CHECK(shown == 6u);
+    task(now + 5000u);
+    CHECK(screen != SCREEN_ERROR);
+}
 int main(void) {
     test_menu();
     test_temperature_and_cutoff();
@@ -501,6 +570,7 @@ int main(void) {
     test_96_hour_countdown_and_wrap();
     test_power_restore_and_stopped_state();
     test_restore_wait_fault_and_save_failure();
+    test_error_led_and_power_view();
     printf("controller: %u scenarios, %u checks passed\n", scenarios, checks);
     return 0;
 }

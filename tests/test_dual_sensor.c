@@ -102,6 +102,13 @@ static void run(uint32_t duration) {
         sensor_task(now);
     }
 }
+static void next_result(void) {
+    unsigned before = measurements;
+    for (unsigned i = 0u; i < 2000u && measurements == before; ++i)
+        run(1u);
+    CHECK(measurements == before + 1u);
+    run(10u);
+}
 static void reset(uint32_t epoch) {
     measurements = serials = resets = aht_frames = 0u;
     sht_present = aht_present = true;
@@ -121,8 +128,9 @@ int main(void) {
         run(800u);
         CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X);
         CHECK(sensor_get()->temperature_x10 == 250 && sensor_get()->humidity_x10 == 450u);
-        CHECK(serials == 1u && resets == 1u && measurements == 1u && aht_frames == 1u);
+        CHECK(serials == 1u && resets == 1u && measurements == 1u && aht_frames == 0u);
         CHECK(!sensor_overheated(now));
+        CHECK(!sensor_primary_fault(now));
     }
     reset(0u);
     aht_present = false;
@@ -141,18 +149,22 @@ int main(void) {
     run(1800u);
     CHECK(sensor_ok(now) && sensor_source() == SENSOR_AHT20 && measurements == 0u);
     serial_bad = false;
-    run(1500u);
+    run(3500u);
     CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X);
-    /* Each failed half of the frame invalidates the primary immediately. */
+    /* One bad frame never alternates sources. Confirm failure, then require
+     * consecutive valid recovery frames before returning to the primary. */
     for (unsigned crc = 0u; crc < 2u; ++crc) {
         reset(0u);
         run(800u);
         t_crc_bad = crc == 0u;
         rh_crc_bad = crc == 1u;
         run(1500u);
+        CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X && sensor_primary_fault(now));
+        CHECK(sensor_get()->temperature_x10 == 250);
+        run(2200u);
         CHECK(sensor_ok(now) && sensor_source() == SENSOR_AHT20);
         t_crc_bad = rh_crc_bad = false;
-        run(1500u);
+        run(3500u);
         CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X);
     }
     reset(0u);
@@ -165,10 +177,10 @@ int main(void) {
     run(3500u);
     CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X);
     aht_present = false;
-    run(1500u);
+    run(3500u);
     CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X);
     read_nack = true;
-    run(1500u);
+    run(3500u);
     CHECK(!sensor_ok(now));
     read_nack = false;
     run(3500u);
@@ -180,7 +192,10 @@ int main(void) {
     reserve_t10 = 740;
     run(800u);
     CHECK(sensor_source() == SENSOR_SHT4X && sensor_get()->temperature_x10 == 250);
-    CHECK(sensor_overheated(now)); /* Backup alarm is independent of selection. */
+    CHECK(!sensor_overheated(now) && aht_frames == 0u);
+    sht_present = false;
+    run(3500u);
+    CHECK(sensor_source() == SENSOR_AHT20 && sensor_overheated(now));
     reset(0u);
     primary_t10 = 730;
     run(800u);
@@ -194,17 +209,44 @@ int main(void) {
     run(800u);
     CHECK(sensor_get()->humidity_x10 == 0u);
     raw_humidity = 65535u;
-    run(1500u);
+    run(3500u);
     CHECK(sensor_get()->humidity_x10 == 1000u);
     use_raw_temperature = true;
     raw_temperature = 0u; /* -45 C is outside the specified measurement range. */
-    run(1500u);
+    run(3500u);
     CHECK(sensor_ok(now) && sensor_source() == SENSOR_AHT20);
+    reset(0u);
+    run(800u);
+    t_crc_bad = true;
+    run(3500u);
+    CHECK(sensor_source() == SENSOR_AHT20);
+    t_crc_bad = false;
+    next_result();
+    CHECK(sensor_source() == SENSOR_AHT20); /* One success cannot flip it back. */
+    t_crc_bad = true;
+    next_result();
+    CHECK(sensor_source() == SENSOR_AHT20);
+    t_crc_bad = false;
+    next_result();
+    CHECK(sensor_source() == SENSOR_AHT20);
+    next_result();
+    CHECK(sensor_source() == SENSOR_AHT20);
+    next_result();
+    CHECK(sensor_source() == SENSOR_SHT4X && !sensor_primary_fault(now));
+    unsigned reserve_reads = aht_frames;
+    run(2000u);
+    CHECK(aht_frames == reserve_reads); /* Healthy primary never polls reserve. */
+    t_crc_bad = true;
+    next_result();
+    CHECK(sensor_source() == SENSOR_SHT4X && sensor_primary_fault(now));
+    t_crc_bad = false;
+    next_result();
+    CHECK(sensor_source() == SENSOR_SHT4X && !sensor_primary_fault(now));
     reset(0xFFFFFF80u);
     run(800u);
     CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X && !sensor_overheated(now));
     printf("dual sensor: scan, serial/CRC, priority, failover/recovery, "
-           "independent overheat, "
+           "active-source overheat, "
            "stale, range, rollover: %u checks passed\n",
            checks);
     return 0;

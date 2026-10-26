@@ -42,11 +42,11 @@ jobs:
       - name: Verify reproducible HEX and BIN
         run: |
           $expected = @{
-            'bin' = 'a7ade85f0b86b7d7ab70ba3eac465a18151c0ddb04e427a490166e0f0cb1190c'
-            'hex' = '6d0ca4267057774d648ac9dca5eeb0418b4fbd4cf06b42b7ba6066392b1e60a0'
+            'bin' = 'b9f9d09829c6bb35cbab229f2f5f87ed3599081a18068e99109cf3d3a3cdf950'
+            'hex' = '308cc66a4fcd3db9ceccbdb61cbe9e57e929122945e3c1eeece5567f0f378fd3'
           }
           foreach ($ext in $expected.Keys) {
-            $path = "build/v1.2.0/sovol_sh01mod_v1_2_0.$ext"
+            $path = "build/v1.3.0/sovol_sh01mod_v1_3_0.$ext"
             if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ne $expected[$ext]) {
               throw "Application SHA256 mismatch: $path"
             }
@@ -54,12 +54,12 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: sovol-sh01mod-1.2.0
+          name: sovol-sh01mod-1.3.0
           if-no-files-found: error
           retention-days: 30
           path: |
-            build/v1.2.0/*.hex
-            build/v1.2.0/*.bin
-            build/v1.2.0/*.elf
-            build/v1.2.0/*.map
-            build/v1.2.0/*.audit.json
+            build/v1.3.0/*.hex
+            build/v1.3.0/*.bin
+            build/v1.3.0/*.elf
+            build/v1.3.0/*.map
+            build/v1.3.0/*.audit.json

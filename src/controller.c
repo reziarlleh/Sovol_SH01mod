@@ -17,6 +17,10 @@ static uint8_t edit_target;
 static bool time_changed;
 static bool dirty, beeping, plate_ok, plate_latched;
 static bool resume_pending;
+static bool error_view;
+static uint8_t displayed_error;
+static uint16_t error_mask;
+static uint32_t error_view_at, error_blink_at;
 static uint32_t resume_started, last_checkpoint;
 static uint16_t plate_adc;
 static const uint8_t time_presets_h[] = {SH01_TIME_PRESET_VALUES};
@@ -45,9 +49,11 @@ static void beep(uint32_t now) {
     hal_beep(true);
 }
 /* One owner for LED state; LCD refresh must never pulse the button lights. */
-static void update_leds(void) {
+static void update_leds(uint32_t now) {
     bool enabled = state.mode != MODE_OFF;
-    hal_led(0u, enabled);
+    bool blink_on =
+        !error_mask || ((uint32_t)(now - error_blink_at) / SH01_ERROR_BLINK_MS) % 2u == 0u;
+    hal_led(0u, enabled && blink_on);
     hal_led(1u, enabled && (state.mode == MODE_TEMP || state.mode == MODE_TIME || keys[1].stable));
     hal_led(2u, enabled && keys[2].stable);
 }
@@ -58,7 +64,9 @@ static void off(void) {
     beeping = false;
     state.mode = MODE_OFF;
     state.error = storage_disarm() ? 0u : 5u;
-    update_leds();
+    error_view = false;
+    error_mask = 0u;
+    update_leds(0u);
     lcd_enable(false);
 }
 static void fault(uint8_t error, uint32_t now) {
@@ -68,6 +76,10 @@ static void fault(uint8_t error, uint32_t now) {
         error = 5u;
     state.error = error;
     state.mode = MODE_FAULT;
+    if (error_view) {
+        displayed_error = error;
+        error_view_at = now;
+    }
     dirty = true;
     beep(now);
 }
@@ -81,6 +93,38 @@ static uint8_t safety(uint32_t now) {
     if (sensor_get()->temperature_x10 <= -100)
         return 3u;
     return 0u;
+}
+static uint16_t current_errors(uint32_t now) {
+    uint16_t mask = state.error ? (uint16_t)(1u << state.error) : 0u;
+    bool valid = sensor_ok(now);
+    if (!valid)
+        mask |= 1u << 1;
+    if (!plate_ok || plate_adc >= 37200u || plate_adc < 100u)
+        mask |= 1u << 2;
+    if (valid && sensor_get()->temperature_x10 <= -100)
+        mask |= 1u << 3;
+    if (valid && sensor_overheated(now))
+        mask |= 1u << 4;
+    if (sensor_primary_fault(now))
+        mask |= 1u << 6;
+    return mask;
+}
+static void show_error(uint32_t now) {
+    uint16_t mask = current_errors(now);
+    unsigned first = error_view && !elapsed(now, error_view_at, SH01_ERROR_VIEW_MS)
+                         ? displayed_error % 6u + 1u
+                         : 1u;
+    displayed_error = 0u;
+    for (unsigned i = 0u; i < 6u; ++i) {
+        unsigned code = (first - 1u + i) % 6u + 1u;
+        if (mask & (1u << code)) {
+            displayed_error = (uint8_t)code;
+            break;
+        }
+    }
+    error_view = true;
+    error_view_at = now;
+    dirty = true;
 }
 static void begin_drying(uint32_t now) {
     uint8_t error = safety(now);
@@ -133,7 +177,7 @@ static unsigned key_event(unsigned id, uint32_t now) {
     return event;
 }
 static void short_key(unsigned key, uint32_t now) {
-    if (resume_pending) {
+    if (resume_pending && key != 0u) {
         resume_pending = false;
         if (!storage_disarm()) {
             fault(5u, now);
@@ -154,21 +198,20 @@ static void short_key(unsigned key, uint32_t now) {
     dirty = true;
     last_edit = now;
     if (key == 0u) {
+        show_error(now);
+    } else if (key == 1u) {
+        error_view = false;
         if (state.mode == MODE_FAULT) {
-            if (safety(now) == 0u && storage_disarm()) {
-                state.error = 0u;
-                state.mode = MODE_VIEW;
-                state.time_screen = false;
-                last_screen = now;
+            if (safety(now) || !storage_disarm()) {
+                show_error(now);
+                return;
             }
-        } else {
-            state.time_screen = !state.time_screen;
-            last_screen = now;
+            state.error = 0u;
         }
-    } else if (key == 1u && state.mode != MODE_FAULT) {
-        if (state.mode == MODE_VIEW || state.mode == MODE_DRY) {
-            edit_seconds =
-                state.mode == MODE_DRY ? state.remaining_s : (uint32_t)state.hours * 3600u;
+        if (state.mode == MODE_VIEW || state.mode == MODE_DRY || state.mode == MODE_FAULT) {
+            edit_seconds = state.mode == MODE_DRY || state.mode == MODE_FAULT
+                               ? state.remaining_s
+                               : (uint32_t)state.hours * 3600u;
             edit_target = state.target_c;
             time_changed = false;
             outputs(false, false);
@@ -184,6 +227,7 @@ static void short_key(unsigned key, uint32_t now) {
             begin_drying(now);
         }
     } else if (key == 2u) {
+        error_view = false;
         if (state.mode == MODE_TEMP)
             edit_target = edit_target >= SH01_TEMP_MAX_C
                               ? SH01_TEMP_MIN_C
@@ -196,10 +240,22 @@ static void short_key(unsigned key, uint32_t now) {
     }
 }
 static void render(uint32_t now) {
-    update_leds();
     if (state.mode == MODE_OFF)
         return;
-    if ((state.mode == MODE_VIEW || state.mode == MODE_DRY) &&
+    uint16_t mask = current_errors(now);
+    if (mask != error_mask) {
+        error_mask = mask;
+        error_blink_at = now;
+    }
+    update_leds(now);
+    if (error_view && elapsed(now, error_view_at, SH01_ERROR_VIEW_MS)) {
+        error_view = false;
+        last_screen = now;
+        last_edit = now;
+        dirty = true;
+    }
+    if (!error_view &&
+        (state.mode == MODE_VIEW || state.mode == MODE_DRY || state.mode == MODE_FAULT) &&
         elapsed(now, last_screen, SH01_SCREEN_INTERVAL_MS)) {
         uint32_t pages = (uint32_t)(now - last_screen) / SH01_SCREEN_INTERVAL_MS;
         last_screen += pages * SH01_SCREEN_INTERVAL_MS;
@@ -211,8 +267,8 @@ static void render(uint32_t now) {
         return;
     dirty = false;
     last_lcd = now;
-    if (state.mode == MODE_FAULT)
-        lcd_error(state.error);
+    if (error_view)
+        lcd_error(displayed_error);
     else if (state.mode == MODE_TEMP)
         lcd_set_temperature(edit_target);
     else if (state.mode == MODE_TIME)
@@ -249,6 +305,10 @@ void controller_init(uint32_t now) {
         }
     }
     resume_started = last_checkpoint = now;
+    error_view = false;
+    error_mask = 0u;
+    displayed_error = 0u;
+    error_view_at = error_blink_at = now;
     edit_seconds = state.remaining_s;
     edit_target = state.target_c;
     time_changed = false;
@@ -317,7 +377,7 @@ void controller_task(uint32_t now) {
     }
     /* Menu timeout: abandoned TEMP/TIME returns to view;
      * changing TIME permits automatic start after five seconds. */
-    if ((state.mode == MODE_TEMP || state.mode == MODE_TIME) &&
+    if (!error_view && (state.mode == MODE_TEMP || state.mode == MODE_TIME) &&
         elapsed(now, last_edit, SH01_MENU_TIMEOUT_MS)) {
         if (state.mode == MODE_TIME && time_changed)
             begin_drying(now);
