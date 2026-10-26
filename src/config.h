@@ -1,0 +1,19 @@
+#ifndef SH01_CONFIG_H
+#define SH01_CONFIG_H
+#define FW_VERSION "1.0.0"
+#define SH01_TEMP_MIN_C 40u
+#define SH01_TEMP_MAX_C 70u
+#define SH01_TEMP_STEP_C 5u
+#define SH01_CHAMBER_FAULT_X10 730
+#define SH01_TIME_MIN_H 6u
+#define SH01_TIME_MAX_H 12u
+#define SH01_KEY_DEBOUNCE_MS 30ul
+#define SH01_KEY_HOLD_MS 2000ul
+#define SH01_MENU_TIMEOUT_MS 5000ul
+#define SH01_SENSOR_STALE_MS 3000ul
+#define SH01_SENSOR_PERIOD_MS 1000ul
+#define SH01_SENSOR_WAIT_MS 500ul
+/* Factory mean ADC *10: OFF below1419, ON at/above1860. */
+#define SH01_PLATE_OFF_ADC_X10 1419u
+#define SH01_PLATE_ON_ADC_X10 1860u
+#endif

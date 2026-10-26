@@ -1,0 +1,12 @@
+/toolchain/
+/.tools/
+/downloads/
+/build/
+/hardware-local/
+/.repowise/
+/.codex/
+/.codex-remote-attachments/
+__pycache__/
+.env
+.env.*
+*.partial

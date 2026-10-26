@@ -1,0 +1,3 @@
+# Preserve exact imported bytes: SHA256SUMS and vendor files must survive cloning.
+* -text
+vendor/** -whitespace
