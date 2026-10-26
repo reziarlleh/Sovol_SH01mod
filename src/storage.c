@@ -73,10 +73,10 @@ static bool pack(const storage_cycle_t *cycle, uint32_t *value) {
         if (presets[i] == cycle->hours)
             break;
     if (i == sizeof presets || cycle->remaining_s > (uint32_t)cycle->hours * 3600u ||
-        (cycle->running && cycle->remaining_s == 0u))
+        (cycle->running && (cycle->remaining_s == 0u || cycle->powered_off)))
         return false;
     *value = cycle->remaining_s | (uint32_t)setting_code(cycle) << 19 | (uint32_t)i << 26 |
-             (cycle->running ? 1ul << 30 : 0u);
+             (cycle->running ? 1ul << 30 : 0u) | (cycle->powered_off ? 1ul << 31 : 0u);
     return true;
 }
 static bool decode(uint32_t slot, storage_cycle_t *cycle, uint32_t *seq) {
@@ -85,7 +85,7 @@ static bool decode(uint32_t slot, storage_cycle_t *cycle, uint32_t *seq) {
         return false;
     *seq = flash_hal_read(address + 4u);
     packed = flash_hal_read(address + 8u);
-    if (flash_hal_read(address + 12u) != crc32(*seq, packed) || packed & 0x80000000u)
+    if (flash_hal_read(address + 12u) != crc32(*seq, packed))
         return false;
     index = (packed >> 26) & 15u;
     if (index >= sizeof presets)
@@ -95,6 +95,7 @@ static bool decode(uint32_t slot, storage_cycle_t *cycle, uint32_t *seq) {
         return false;
     cycle->hours = presets[index];
     cycle->running = (packed & (1ul << 30)) != 0u;
+    cycle->powered_off = (packed & (1ul << 31)) != 0u;
     if (!pack(cycle, &unused))
         return false;
     if (flash_hal_read(address + 16u) != UINT32_MAX)
@@ -173,7 +174,8 @@ bool storage_save(const storage_cycle_t *cycle) {
     uint32_t check_seq;
     if (!decode(slot, &check, &check_seq) || check_seq != seq || check.running != cycle->running ||
         check.target_c != cycle->target_c || check.hours != cycle->hours ||
-        check.remaining_s != cycle->remaining_s || check.fan_percent != cycle->fan_percent)
+        check.remaining_s != cycle->remaining_s || check.fan_percent != cycle->fan_percent ||
+        check.powered_off != cycle->powered_off)
         return false;
     latest_slot = slot;
     sequence = seq;

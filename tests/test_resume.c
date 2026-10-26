@@ -13,6 +13,8 @@ static unsigned checks;
 static uint8_t journal[4096];
 static bool keys[3], heater, fan, light, healthy = true;
 static uint32_t now;
+static unsigned lcd_wakes, alarms;
+static bool leds[3];
 static sensor_sample_t sample = {.temperature_x10 = 250, .humidity_x10 = 450u};
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
@@ -46,12 +48,12 @@ void hal_fan_percent(uint8_t percent) {
     fan = percent != 0u;
 }
 void hal_click(void) {}
-void hal_error_signal(void) {}
+void hal_error_signal(void) { ++alarms; }
 void hal_sound_stop(void) {}
 void lcd_fan_percent(uint8_t percent) { (void)percent; }
 void hal_led(unsigned key, bool on) {
-    (void)key;
-    (void)on;
+    CHECK(key < 3u);
+    leds[key] = on;
 }
 bool hal_key(unsigned key) {
     CHECK(key < 3u);
@@ -74,7 +76,11 @@ bool sensor_primary_fault(uint32_t t) {
     (void)t;
     return false;
 }
-void lcd_enable(bool on) { light = on; }
+void lcd_enable(bool on) {
+    light = on;
+    if (on)
+        ++lcd_wakes;
+}
 void lcd_temperature_humidity(int16_t t, uint16_t rh, bool work) {
     (void)t;
     (void)rh;
@@ -104,7 +110,8 @@ static void press(unsigned key) {
 static void reboot(void) {
     memset(keys, 0, sizeof keys);
     now = 0u;
-    light = true;
+    light = false;
+    lcd_wakes = alarms = 0u;
     controller_init(now);
     CHECK(!heater && !fan);
     tick(0u);
@@ -140,13 +147,28 @@ int main(void) {
     tick(t + 30u);
     tick(t + 2030u);
     CHECK(!heater && !fan && !light);
+    CHECK(storage_load(&loaded) && loaded.powered_off && !loaded.running);
+    CHECK(loaded.remaining_s == 21600u && loaded.target_c == 40u && loaded.hours == 6u &&
+          loaded.fan_percent == 30u);
+    uint32_t stopped = loaded.remaining_s;
+    healthy = false;
     reboot();
-    CHECK(controller_get()->mode == MODE_VIEW && !heater && !fan);
+    tick(6000u);
+    CHECK(controller_get()->mode == MODE_OFF && !heater && !fan && !light);
+    CHECK(!lcd_wakes && !alarms && !leds[0] && !leds[1] && !leds[2]);
+    CHECK(controller_get()->target_c == 40u && controller_get()->remaining_s == stopped);
+    healthy = true;
+    reboot(); /* OFF survives repeated power interruptions as well. */
+    CHECK(controller_get()->mode == MODE_OFF && !lcd_wakes && !light);
+    press(0u);
+    CHECK(controller_get()->mode == MODE_VIEW && light && !heater && !fan);
+    CHECK(storage_load(&loaded) && !loaded.powered_off && !loaded.running &&
+          loaded.remaining_s == stopped);
     press(1u);
     press(1u);
     press(1u);
     press(1u);
-    CHECK(heater);
+    CHECK(heater && controller_get()->remaining_s == stopped);
     healthy = false;
     tick(now + 1u);
     CHECK(!heater && controller_get()->mode == MODE_FAULT);

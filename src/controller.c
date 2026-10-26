@@ -53,16 +53,37 @@ static void update_leds(uint32_t now) {
                             state.mode == MODE_FAN || keys[1].stable));
     hal_led(2u, enabled && keys[2].stable);
 }
-static void off(void) {
+static void off(bool reset_cycle) {
     outputs(false, false);
     resume_pending = false;
     hal_sound_stop();
     state.mode = MODE_OFF;
-    state.error = storage_disarm() ? 0u : 5u;
     error_view = false;
     error_mask = 0u;
     update_leds(0u);
     lcd_enable(false);
+    if (reset_cycle) {
+        state.target_c = SH01_TEMP_MIN_C;
+        state.hours = SH01_TIME_MIN_H;
+        state.remaining_s = (uint32_t)state.hours * 3600u;
+    }
+    /* Disarm the old checkpoint before appending the OFF state.
+     * An interrupted append must never restart a manually stopped heater. */
+    bool stopped = storage_disarm();
+    storage_cycle_t cycle = {
+        state.remaining_s, state.target_c, state.hours, false, state.fan_percent, true};
+    state.error = storage_save(&cycle) && stopped ? 0u : 5u;
+}
+static void wake(uint32_t now) {
+    storage_cycle_t cycle = {state.remaining_s, state.target_c, state.hours, false,
+                             state.fan_percent, false};
+    if (!storage_save(&cycle))
+        state.error = 5u;
+    state.mode = state.error == 5u ? MODE_FAULT : MODE_VIEW;
+    state.time_screen = false;
+    last_screen = now;
+    lcd_enable(true);
+    dirty = true;
 }
 static void fault(uint8_t error, uint32_t now) {
     outputs(false, false);
@@ -126,8 +147,8 @@ static void begin_drying(uint32_t now) {
     if (error)
         fault(error, now);
     else {
-        storage_cycle_t cycle = {edit_seconds, state.target_c, state.hours, true,
-                                 state.fan_percent};
+        storage_cycle_t cycle = {edit_seconds, state.target_c,    state.hours,
+                                 true,         state.fan_percent, false};
         if (!storage_save(&cycle)) {
             fault(5u, now);
             return;
@@ -181,13 +202,8 @@ static void short_key(unsigned key, uint32_t now) {
         }
     }
     if (state.mode == MODE_OFF) {
-        if (key == 0u) {
-            state.mode = state.error == 5u ? MODE_FAULT : MODE_VIEW;
-            state.time_screen = false;
-            last_screen = now;
-            lcd_enable(true);
-            dirty = true;
-        }
+        if (key == 0u)
+            wake(now);
         return;
     }
     hal_click();
@@ -205,9 +221,7 @@ static void short_key(unsigned key, uint32_t now) {
             state.error = 0u;
         }
         if (state.mode == MODE_VIEW || state.mode == MODE_DRY || state.mode == MODE_FAULT) {
-            edit_seconds = state.mode == MODE_DRY || state.mode == MODE_FAULT
-                               ? state.remaining_s
-                               : (uint32_t)state.hours * 3600u;
+            edit_seconds = state.remaining_s ? state.remaining_s : (uint32_t)state.hours * 3600u;
             edit_target = state.target_c;
             edit_fan = state.fan_percent;
             time_changed = fan_changed = false;
@@ -302,12 +316,13 @@ void controller_init(uint32_t now) {
         state.target_c = restored.target_c;
         state.hours = restored.hours;
         state.fan_percent = restored.fan_percent;
-        state.remaining_s =
-            restored.running ? restored.remaining_s : (uint32_t)restored.hours * 3600u;
+        state.remaining_s = restored.remaining_s;
+        if (restored.powered_off)
+            state.mode = MODE_OFF;
         resume_pending = restored.running;
     } else {
         storage_cycle_t defaults = {state.remaining_s, state.target_c, state.hours, false,
-                                    state.fan_percent};
+                                    state.fan_percent, false};
         if (!storage_save(&defaults)) {
             state.mode = MODE_FAULT;
             state.error = 5u;
@@ -336,6 +351,8 @@ void controller_init(uint32_t now) {
     plate_latched = false;
     outputs(false, false);
     hal_sound_stop();
+    lcd_enable(state.mode != MODE_OFF);
+    update_leds(now);
     render(now);
 }
 void controller_task(uint32_t now) {
@@ -346,13 +363,10 @@ void controller_task(uint32_t now) {
     }
     if (event[0] == 2u) {
         if (state.mode == MODE_OFF) {
-            state.mode = state.error == 5u ? MODE_FAULT : MODE_VIEW;
-            last_screen = now;
-            lcd_enable(true);
-            dirty = true;
+            wake(now);
             render(now);
         } else
-            off();
+            off(true);
         return;
     }
     if (due(now, next_adc)) {
@@ -412,12 +426,12 @@ void controller_task(uint32_t now) {
         last_second += seconds * 1000u;
         state.remaining_s = seconds >= state.remaining_s ? 0u : state.remaining_s - seconds;
         if (!state.remaining_s) {
-            off();
+            off(false);
             return;
         }
         if (elapsed(now, last_checkpoint, SH01_CHECKPOINT_MS)) {
             storage_cycle_t cycle = {state.remaining_s, state.target_c, state.hours, true,
-                                     state.fan_percent};
+                                     state.fan_percent, false};
             if (!storage_save(&cycle)) {
                 fault(5u, now);
                 render(now);

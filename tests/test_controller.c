@@ -475,7 +475,9 @@ static void test_power_restore_and_stopped_state(void) {
     now = 0u;
     controller_init(now);
     task(0u);
-    CHECK(view()->mode == MODE_VIEW && !heater && !fan);
+    CHECK(view()->mode == MODE_OFF && !heater && !fan && !light);
+    CHECK(view()->target_c == 40u && view()->hours == 6u && view()->remaining_s == 21600u &&
+          persisted.remaining_s == 21600u && persisted.powered_off && !persisted.running);
 }
 static void test_restore_wait_fault_and_save_failure(void) {
     ++scenarios;

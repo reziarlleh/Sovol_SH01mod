@@ -55,6 +55,7 @@ static void number(unsigned position, unsigned value) {
 }
 static void clear(void) { memset(ram, 0, sizeof ram); }
 void lcd_init(void) {
+    hal_backlight(false);
     hal_lcd_cs(true);
     hal_lcd_wr(true);
     hal_lcd_data(true);
@@ -62,11 +63,11 @@ void lcd_init(void) {
     command(0x30u);
     command(0u);
     command(0x0Au);
-    command(2u);
-    command(6u);
+    command(4u);
+    command(0u);
     clear();
     flush();
-    hal_backlight(true);
+    /* controller_init enables the LCD after reading the saved power state. */
 }
 void lcd_enable(bool on) {
     if (on) {

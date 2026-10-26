@@ -8,6 +8,7 @@ typedef struct {
     uint8_t target_c, hours;
     bool running;
     uint8_t fan_percent;
+    bool powered_off;
 } storage_cycle_t;
 
 void storage_init(void);

@@ -66,7 +66,7 @@ static void reset(void) {
     storage_init();
 }
 static storage_cycle_t cycle(uint32_t remaining) {
-    return (storage_cycle_t){remaining, 65u, 96u, true, 100u};
+    return (storage_cycle_t){remaining, 65u, 96u, true, 100u, false};
 }
 static void test_roundtrip_and_rotation(void) {
     storage_cycle_t loaded;
@@ -197,7 +197,50 @@ static void test_fan_settings_and_legacy(void) {
             CHECK(!storage_save(&c));
     }
 }
+static void test_powered_off_and_interrupted_save(void) {
+    storage_cycle_t c = cycle(12345u), loaded;
+    reset();
+    CHECK(storage_save(&c));
+    CHECK(storage_disarm()); /* This is the first stage of controller OFF. */
+    memcpy(snapshot, flash, sizeof flash);
+    for (unsigned mode = 0u; mode < 3u; ++mode)
+        for (unsigned step = 1u; step <= 4u; ++step) {
+            memcpy(flash, snapshot, sizeof flash);
+            storage_init();
+            operations = 0u;
+            cut_at = step;
+            cut_mode = mode;
+            if (setjmp(power_cut) == 0) {
+                c = cycle(12310u);
+                c.running = false;
+                c.powered_off = true;
+                (void)storage_save(&c);
+            }
+            cut_at = 0u;
+            storage_init();
+            CHECK(storage_load(&loaded) && !loaded.running);
+            CHECK(loaded.remaining_s == (loaded.powered_off ? 12310u : 12345u));
+        }
+    reset();
+    c = cycle(12310u);
+    c.running = false;
+    c.powered_off = true;
+    c.fan_percent = 30u;
+    CHECK(storage_save(&c));
+    storage_init();
+    CHECK(storage_load(&loaded) && loaded.powered_off && !loaded.running &&
+          loaded.remaining_s == 12310u && loaded.target_c == 65u && loaded.fan_percent == 30u);
+    c.running = true;
+    CHECK(!storage_save(&c)); /* OFF can never arm resume. */
+    c.running = false;
+    c.powered_off = false;
+    CHECK(storage_save(&c));
+    storage_init();
+    CHECK(storage_load(&loaded) && !loaded.running && !loaded.powered_off &&
+          loaded.remaining_s == 12310u);
+}
 int main(void) {
+    test_powered_off_and_interrupted_save();
     test_fan_settings_and_legacy();
     test_roundtrip_and_rotation();
     test_torn_append_and_erase();

@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-static unsigned checks, count, bits, commands[32], command_count;
+static unsigned checks, count, bits, commands[32], command_count, backlight_enables;
 static bool selected, data, backlight, was_wr = true;
 static uint16_t frame;
 static uint8_t ram[22];
@@ -16,7 +16,11 @@ static uint8_t ram[22];
         }                                                                                          \
     } while (0)
 void hal_delay_us(uint32_t us) { CHECK(us >= 1u); }
-void hal_backlight(bool on) { backlight = on; }
+void hal_backlight(bool on) {
+    backlight = on;
+    if (on)
+        ++backlight_enables;
+}
 void hal_lcd_data(bool high) { data = high; }
 void hal_lcd_wr(bool high) {
     if (selected && high && !was_wr) {
@@ -55,10 +59,10 @@ static uint8_t digit(unsigned pos) {
     return value;
 }
 int main(void) {
-    unsigned expected[6] = {0x52u, 0x30u, 0u, 0x0Au, 2u, 6u};
+    unsigned expected[6] = {0x52u, 0x30u, 0u, 0x0Au, 4u, 0u};
     lcd_init();
-    CHECK(command_count == 6u && memcmp(expected, commands, sizeof expected) == 0 && backlight &&
-          count == 28u);
+    CHECK(command_count == 6u && memcmp(expected, commands, sizeof expected) == 0 && !backlight &&
+          count == 28u && backlight_enables == 0u);
     lcd_temperature_humidity(270, 450u, true);
     CHECK(digit(0) == 0x5Bu && digit(1) == 7u && digit(2) == 0x66u && digit(3) == 0x6Du);
     CHECK(ram[14] == 11u && ram[15] == 0u);
