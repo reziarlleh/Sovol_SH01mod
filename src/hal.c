@@ -1,12 +1,19 @@
 #include "hal.h"
+#include "actuators.h"
 #include "adc.h"
+#include "bt.h"
 #include "ddl.h"
 #include "gpio.h"
 #include "sysctrl.h"
 static volatile uint32_t ms;
 static uint32_t reload;
 static bool adc_ready;
-void SysTick_Handler(void) { ++ms; }
+static bool tone_ready;
+static uint32_t tone_clock;
+void SysTick_Handler(void) {
+    ++ms;
+    actuators_tick_1ms();
+}
 uint32_t hal_millis(void) { return ms; }
 void hal_delay_us(uint32_t us) {
     uint32_t n = (SystemCoreClock + 999999u) / 1000000u;
@@ -51,8 +58,46 @@ static bool pin_cfg(en_gpio_port_t port, en_gpio_pin_t pin, bool input, bool lev
     return Gpio_Init(port, pin, &c) == Ok;
 }
 void hal_heater(bool on) { write_pin(GpioPort0, GpioPin3, on); }
-void hal_fan(bool on) { write_pin(GpioPort3, GpioPin1, on); }
-void hal_beep(bool on) { write_pin(GpioPort3, GpioPin4, on); }
+void hal_fan_drive(bool on) { write_pin(GpioPort3, GpioPin1, on); }
+void hal_tone_drive(uint16_t hz) {
+    if (tone_ready)
+        Bt_Stop(TIM1);
+    Gpio_SetAfMode(GpioPort3, GpioPin4, GpioAf0);
+    write_pin(GpioPort3, GpioPin4, hz == UINT16_MAX);
+    if (!tone_ready || !hz || hz == UINT16_MAX)
+        return;
+    uint16_t start = (uint16_t)(65536u - tone_clock / (2u * hz));
+    Bt_ARRSet(TIM1, start);
+    Bt_Cnt16Set(TIM1, start);
+    Bt_ClearIntFlag(TIM1);
+    /* Reference manual rev2.50, p117: P34_SEL=111 => TIM1_TOG. */
+    Gpio_SetAfMode(GpioPort3, GpioPin4, GpioAf7);
+    Bt_Run(TIM1);
+}
+void hal_fan_percent(uint8_t percent) {
+    uint32_t saved = __get_PRIMASK();
+    __disable_irq();
+    actuators_fan(percent);
+    __set_PRIMASK(saved);
+}
+void hal_click(void) {
+    uint32_t saved = __get_PRIMASK();
+    __disable_irq();
+    actuators_click();
+    __set_PRIMASK(saved);
+}
+void hal_error_signal(void) {
+    uint32_t saved = __get_PRIMASK();
+    __disable_irq();
+    actuators_error_signal();
+    __set_PRIMASK(saved);
+}
+void hal_sound_stop(void) {
+    uint32_t saved = __get_PRIMASK();
+    __disable_irq();
+    actuators_silence();
+    __set_PRIMASK(saved);
+}
 void hal_backlight(bool on) { write_pin(GpioPort0, GpioPin2, on); }
 void hal_led(unsigned key, bool on) {
     const en_gpio_pin_t pins[3] = {GpioPin6, GpioPin5, GpioPin3};
@@ -107,6 +152,17 @@ bool hal_early_init(void) {
     return adc_ready && ok;
 }
 bool hal_lcd_pins_init(void) {
+    stc_bt_cfg_t c;
+    DDL_ZERO_STRUCT(c);
+    c.enPRS = BtPCLKDiv8;
+    c.enTog = BtTogEnable;
+    c.enMD = BtMode2;
+    if (Sysctrl_SetPeripheralGate(SysctrlPeripheralBt, TRUE) != Ok || Bt_Init(TIM1, &c) != Ok)
+        return false;
+    tone_clock = Sysctrl_GetPClkFreq() / 8u;
+    if (tone_clock < 4000u || tone_clock > 4000000u)
+        return false;
+    tone_ready = true;
     if (Sysctrl_SetFunc(SysctrlSWDUseIOEn, TRUE) != Ok)
         return false;
     return pin_cfg(GpioPort2, GpioPin7, false, true, false, false) &&

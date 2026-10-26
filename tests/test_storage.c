@@ -66,7 +66,7 @@ static void reset(void) {
     storage_init();
 }
 static storage_cycle_t cycle(uint32_t remaining) {
-    return (storage_cycle_t){remaining, 65u, 96u, true};
+    return (storage_cycle_t){remaining, 65u, 96u, true, 100u};
 }
 static void test_roundtrip_and_rotation(void) {
     storage_cycle_t loaded;
@@ -103,12 +103,14 @@ static void test_torn_append_and_erase(void) {
             storage_init();
             if (setjmp(power_cut) == 0) {
                 c = cycle(345540u);
+                c.fan_percent = 30u;
                 (void)storage_save(&c);
             }
             cut_at = 0u;
             storage_init();
             CHECK(storage_load(&loaded) && loaded.running);
             CHECK(loaded.remaining_s == 345600u || loaded.remaining_s == 345540u);
+            CHECK(loaded.fan_percent == (loaded.remaining_s == 345600u ? 100u : 30u));
             c = cycle(345480u);
             CHECK(storage_save(&c));
             storage_init();
@@ -174,7 +176,29 @@ static void test_stop_and_corruption(void) {
     c.remaining_s = 345601u;
     CHECK(!storage_save(&c));
 }
+static void test_fan_settings_and_legacy(void) {
+    storage_cycle_t loaded, c = cycle(345600u);
+    reset();
+    CHECK(storage_save(&c));
+    /* Exactly the old format, not a fixture produced by the new decoder. */
+    CHECK(flash_hal_read(SH01_JOURNAL_BASE + 8u) == (345600u | 65u << 19 | 9u << 26 | 1u << 30));
+    for (unsigned t = 40u; t <= 70u; t += 5u)
+        for (unsigned percent = 10u; percent <= 100u; percent += 10u) {
+            c.target_c = (uint8_t)t;
+            c.fan_percent = (uint8_t)percent;
+            CHECK(storage_save(&c));
+            storage_init();
+            CHECK(storage_load(&loaded) && loaded.running && loaded.target_c == t &&
+                  loaded.fan_percent == percent && loaded.remaining_s == c.remaining_s);
+        }
+    for (unsigned percent = 0u; percent < 256u; ++percent) {
+        c.fan_percent = (uint8_t)percent;
+        if (percent < 10u || percent > 100u || percent % 10u)
+            CHECK(!storage_save(&c));
+    }
+}
 int main(void) {
+    test_fan_settings_and_legacy();
     test_roundtrip_and_rotation();
     test_torn_append_and_erase();
     test_stop_and_corruption();

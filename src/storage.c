@@ -30,10 +30,44 @@ static uint32_t crc32(uint32_t seq, uint32_t packed) {
         }
     return ~crc;
 }
+static bool legacy_temperature(unsigned code) {
+    return code >= SH01_TEMP_MIN_C && code <= SH01_TEMP_MAX_C &&
+           (code - SH01_TEMP_MIN_C) % SH01_TEMP_STEP_C == 0u;
+}
+/* Keep every old 100% record byte-compatible. Other speeds use the 63
+ * remaining codes, skipping the seven legacy temperatures. Old firmware
+ * rejects these codes and its newer-record fence prevents stale resume. */
+static unsigned setting_code(const storage_cycle_t *cycle) {
+    if (cycle->fan_percent == 100u)
+        return cycle->target_c;
+    unsigned code =
+        (cycle->target_c - SH01_TEMP_MIN_C) / SH01_TEMP_STEP_C * 9u + cycle->fan_percent / 10u - 1u;
+    for (unsigned t = SH01_TEMP_MIN_C; t <= SH01_TEMP_MAX_C; t += SH01_TEMP_STEP_C)
+        if (code >= t)
+            ++code;
+    return code;
+}
+static bool decode_setting(unsigned code, storage_cycle_t *cycle) {
+    if (legacy_temperature(code)) {
+        cycle->target_c = (uint8_t)code;
+        cycle->fan_percent = 100u;
+        return true;
+    }
+    unsigned index = code;
+    for (unsigned t = SH01_TEMP_MIN_C; t <= SH01_TEMP_MAX_C; t += SH01_TEMP_STEP_C)
+        if (code > t)
+            --index;
+    if (index >= 63u)
+        return false;
+    cycle->target_c = (uint8_t)(SH01_TEMP_MIN_C + index / 9u * SH01_TEMP_STEP_C);
+    cycle->fan_percent = (uint8_t)((index % 9u + 1u) * 10u);
+    return true;
+}
 static bool pack(const storage_cycle_t *cycle, uint32_t *value) {
     unsigned i;
     if (!cycle || cycle->target_c < SH01_TEMP_MIN_C || cycle->target_c > SH01_TEMP_MAX_C ||
-        (cycle->target_c - SH01_TEMP_MIN_C) % SH01_TEMP_STEP_C != 0u)
+        (cycle->target_c - SH01_TEMP_MIN_C) % SH01_TEMP_STEP_C != 0u || cycle->fan_percent < 10u ||
+        cycle->fan_percent > 100u || cycle->fan_percent % 10u)
         return false;
     for (i = 0u; i < sizeof presets; ++i)
         if (presets[i] == cycle->hours)
@@ -41,7 +75,7 @@ static bool pack(const storage_cycle_t *cycle, uint32_t *value) {
     if (i == sizeof presets || cycle->remaining_s > (uint32_t)cycle->hours * 3600u ||
         (cycle->running && cycle->remaining_s == 0u))
         return false;
-    *value = cycle->remaining_s | (uint32_t)cycle->target_c << 19 | (uint32_t)i << 26 |
+    *value = cycle->remaining_s | (uint32_t)setting_code(cycle) << 19 | (uint32_t)i << 26 |
              (cycle->running ? 1ul << 30 : 0u);
     return true;
 }
@@ -57,7 +91,8 @@ static bool decode(uint32_t slot, storage_cycle_t *cycle, uint32_t *seq) {
     if (index >= sizeof presets)
         return false;
     cycle->remaining_s = packed & 0x7FFFFu;
-    cycle->target_c = (uint8_t)((packed >> 19) & 127u);
+    if (!decode_setting((packed >> 19) & 127u, cycle))
+        return false;
     cycle->hours = presets[index];
     cycle->running = (packed & (1ul << 30)) != 0u;
     if (!pack(cycle, &unused))
@@ -138,7 +173,7 @@ bool storage_save(const storage_cycle_t *cycle) {
     uint32_t check_seq;
     if (!decode(slot, &check, &check_seq) || check_seq != seq || check.running != cycle->running ||
         check.target_c != cycle->target_c || check.hours != cycle->hours ||
-        check.remaining_s != cycle->remaining_s)
+        check.remaining_s != cycle->remaining_s || check.fan_percent != cycle->fan_percent)
         return false;
     latest_slot = slot;
     sequence = seq;

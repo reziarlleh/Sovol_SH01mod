@@ -10,7 +10,8 @@ const char firmware_version[] __attribute__((used, section(".firmware_info"))) =
 
 static void failed(void) {
     hal_heater(false);
-    hal_fan(false);
+    hal_fan_percent(0u);
+    hal_sound_stop();
     for (;;) {
     }
 }

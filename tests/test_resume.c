@@ -40,8 +40,15 @@ bool flash_hal_erase(uint32_t address) {
     return true;
 }
 void hal_heater(bool on) { heater = on; }
-void hal_fan(bool on) { fan = on; }
-void hal_beep(bool on) { (void)on; }
+static uint8_t fan_percent;
+void hal_fan_percent(uint8_t percent) {
+    fan_percent = percent;
+    fan = percent != 0u;
+}
+void hal_click(void) {}
+void hal_error_signal(void) {}
+void hal_sound_stop(void) {}
+void lcd_fan_percent(uint8_t percent) { (void)percent; }
 void hal_led(unsigned key, bool on) {
     (void)key;
     (void)on;
@@ -113,6 +120,11 @@ int main(void) {
     for (unsigned i = 0u; i < 9u; ++i)
         press(2u);
     press(1u);
+    press(2u);
+    press(2u);
+    press(2u);
+    press(1u);
+    CHECK(fan_percent == 30u);
     CHECK(heater && fan && controller_get()->hours == 96u && controller_get()->target_c == 45u);
     tick(now + 60000u);
     CHECK(storage_load(&loaded) && loaded.running);
@@ -120,6 +132,7 @@ int main(void) {
     tick(now + 13000u);
     reboot();
     CHECK(heater && fan && controller_get()->remaining_s == saved);
+    CHECK(fan_percent == 30u && loaded.fan_percent == 30u);
     CHECK(controller_get()->target_c == 45u && controller_get()->hours == 96u);
     uint32_t t = now + 10u;
     keys[0] = true;
@@ -129,6 +142,7 @@ int main(void) {
     CHECK(!heater && !fan && !light);
     reboot();
     CHECK(controller_get()->mode == MODE_VIEW && !heater && !fan);
+    press(1u);
     press(1u);
     press(1u);
     press(1u);

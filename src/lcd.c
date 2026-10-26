@@ -123,3 +123,12 @@ void lcd_error(uint8_t code) {
     digit(3u, digits[code % 10u]);
     flush();
 }
+void lcd_fan_percent(uint8_t percent) {
+    clear();
+    digit(0u, 0x71u); /* F */
+    if (percent >= 100u)
+        digit(1u, digits[1]);
+    number(2u, percent);
+    ram[14] = 2u; /* percent only */
+    flush();
+}

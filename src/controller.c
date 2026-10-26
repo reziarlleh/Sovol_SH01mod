@@ -10,12 +10,12 @@ typedef struct {
 } key_t;
 static key_t keys[3];
 static controller_state_t state;
-static uint32_t last_second, last_lcd, next_adc, beep_until, last_screen;
+static uint32_t last_second, last_lcd, next_adc, last_screen;
 static uint32_t edit_seconds;
 static uint32_t last_edit;
-static uint8_t edit_target;
-static bool time_changed;
-static bool dirty, beeping, plate_ok, plate_latched;
+static uint8_t edit_target, edit_fan;
+static bool time_changed, fan_changed;
+static bool dirty, plate_ok, plate_latched, adc_checked;
 static bool resume_pending;
 static bool error_view;
 static uint8_t displayed_error;
@@ -41,12 +41,7 @@ static void outputs(bool heater, bool fan) {
     state.heater = heater;
     state.fan = fan;
     hal_heater(heater);
-    hal_fan(fan);
-}
-static void beep(uint32_t now) {
-    beeping = true;
-    beep_until = now + 50u;
-    hal_beep(true);
+    hal_fan_percent(fan ? state.fan_percent : 0u);
 }
 /* One owner for LED state; LCD refresh must never pulse the button lights. */
 static void update_leds(uint32_t now) {
@@ -54,14 +49,14 @@ static void update_leds(uint32_t now) {
     bool blink_on =
         !error_mask || ((uint32_t)(now - error_blink_at) / SH01_ERROR_BLINK_MS) % 2u == 0u;
     hal_led(0u, enabled && blink_on);
-    hal_led(1u, enabled && (state.mode == MODE_TEMP || state.mode == MODE_TIME || keys[1].stable));
+    hal_led(1u, enabled && (state.mode == MODE_TEMP || state.mode == MODE_TIME ||
+                            state.mode == MODE_FAN || keys[1].stable));
     hal_led(2u, enabled && keys[2].stable);
 }
 static void off(void) {
     outputs(false, false);
     resume_pending = false;
-    hal_beep(false);
-    beeping = false;
+    hal_sound_stop();
     state.mode = MODE_OFF;
     state.error = storage_disarm() ? 0u : 5u;
     error_view = false;
@@ -81,7 +76,6 @@ static void fault(uint8_t error, uint32_t now) {
         error_view_at = now;
     }
     dirty = true;
-    beep(now);
 }
 static uint8_t safety(uint32_t now) {
     if (!sensor_ok(now))
@@ -99,7 +93,7 @@ static uint16_t current_errors(uint32_t now) {
     bool valid = sensor_ok(now);
     if (!valid)
         mask |= 1u << 1;
-    if (!plate_ok || plate_adc >= 37200u || plate_adc < 100u)
+    if (adc_checked && (!plate_ok || plate_adc >= 37200u || plate_adc < 100u))
         mask |= 1u << 2;
     if (valid && sensor_get()->temperature_x10 <= -100)
         mask |= 1u << 3;
@@ -128,10 +122,12 @@ static void show_error(uint32_t now) {
 }
 static void begin_drying(uint32_t now) {
     uint8_t error = safety(now);
+    state.fan_percent = edit_fan;
     if (error)
         fault(error, now);
     else {
-        storage_cycle_t cycle = {edit_seconds, state.target_c, state.hours, true};
+        storage_cycle_t cycle = {edit_seconds, state.target_c, state.hours, true,
+                                 state.fan_percent};
         if (!storage_save(&cycle)) {
             fault(5u, now);
             return;
@@ -194,7 +190,7 @@ static void short_key(unsigned key, uint32_t now) {
         }
         return;
     }
-    beep(now);
+    hal_click();
     dirty = true;
     last_edit = now;
     if (key == 0u) {
@@ -213,7 +209,8 @@ static void short_key(unsigned key, uint32_t now) {
                                ? state.remaining_s
                                : (uint32_t)state.hours * 3600u;
             edit_target = state.target_c;
-            time_changed = false;
+            edit_fan = state.fan_percent;
+            time_changed = fan_changed = false;
             outputs(false, false);
             if (state.mode == MODE_DRY && !storage_disarm()) {
                 fault(5u, now);
@@ -224,6 +221,8 @@ static void short_key(unsigned key, uint32_t now) {
             state.target_c = edit_target;
             state.mode = MODE_TIME;
         } else if (state.mode == MODE_TIME) {
+            state.mode = MODE_FAN;
+        } else if (state.mode == MODE_FAN) {
             begin_drying(now);
         }
     } else if (key == 2u) {
@@ -236,6 +235,9 @@ static void short_key(unsigned key, uint32_t now) {
             state.hours = next_time_hours(edit_seconds);
             edit_seconds = (uint32_t)state.hours * 3600u;
             time_changed = true;
+        } else if (state.mode == MODE_FAN) {
+            edit_fan = edit_fan >= 100u ? 10u : (uint8_t)(edit_fan + 10u);
+            fan_changed = true;
         }
     }
 }
@@ -244,6 +246,8 @@ static void render(uint32_t now) {
         return;
     uint16_t mask = current_errors(now);
     if (mask != error_mask) {
+        if (mask & (uint16_t)~error_mask)
+            hal_error_signal();
         error_mask = mask;
         error_blink_at = now;
     }
@@ -273,6 +277,8 @@ static void render(uint32_t now) {
         lcd_set_temperature(edit_target);
     else if (state.mode == MODE_TIME)
         lcd_time(edit_seconds, true, false);
+    else if (state.mode == MODE_FAN)
+        lcd_fan_percent(edit_fan);
     else if (state.time_screen)
         lcd_time(state.remaining_s, false, state.mode == MODE_DRY);
     else if (sensor_ok(now)) {
@@ -288,17 +294,20 @@ void controller_init(uint32_t now) {
     state.mode = MODE_VIEW;
     state.target_c = SH01_TEMP_MIN_C;
     state.hours = SH01_TIME_MIN_H;
+    state.fan_percent = 100u;
     state.remaining_s = (uint32_t)state.hours * 3600u;
     storage_init();
     resume_pending = false;
     if (storage_load(&restored)) {
         state.target_c = restored.target_c;
         state.hours = restored.hours;
+        state.fan_percent = restored.fan_percent;
         state.remaining_s =
             restored.running ? restored.remaining_s : (uint32_t)restored.hours * 3600u;
         resume_pending = restored.running;
     } else {
-        storage_cycle_t defaults = {state.remaining_s, state.target_c, state.hours, false};
+        storage_cycle_t defaults = {state.remaining_s, state.target_c, state.hours, false,
+                                    state.fan_percent};
         if (!storage_save(&defaults)) {
             state.mode = MODE_FAULT;
             state.error = 5u;
@@ -311,7 +320,8 @@ void controller_init(uint32_t now) {
     error_view_at = error_blink_at = now;
     edit_seconds = state.remaining_s;
     edit_target = state.target_c;
-    time_changed = false;
+    edit_fan = state.fan_percent;
+    time_changed = fan_changed = false;
     last_edit = now;
     for (i = 0u; i < 3u; ++i) {
         keys[i] = (key_t){0};
@@ -321,11 +331,11 @@ void controller_init(uint32_t now) {
     }
     last_second = last_lcd = next_adc = last_screen = now;
     dirty = true;
-    beeping = false;
+    adc_checked = false;
     plate_ok = false;
     plate_latched = false;
     outputs(false, false);
-    hal_beep(false);
+    hal_sound_stop();
     render(now);
 }
 void controller_task(uint32_t now) {
@@ -345,12 +355,9 @@ void controller_task(uint32_t now) {
             off();
         return;
     }
-    if (beeping && due(now, beep_until)) {
-        beeping = false;
-        hal_beep(false);
-    }
     if (due(now, next_adc)) {
         plate_ok = hal_adc(&plate_adc);
+        adc_checked = true;
         next_adc = now + 250u;
     }
     for (i = 0u; i < 3u; ++i)
@@ -375,11 +382,16 @@ void controller_task(uint32_t now) {
             fault(safety(now), now);
         }
     }
-    /* Menu timeout: abandoned TEMP/TIME returns to view;
-     * changing TIME permits automatic start after five seconds. */
-    if (!error_view && (state.mode == MODE_TEMP || state.mode == MODE_TIME) &&
+    /* A changed TIME advances to FAN on timeout, leaving five seconds for
+     * speed adjustment. FAN confirms a changed cycle after its own timeout. */
+    if (!error_view &&
+        (state.mode == MODE_TEMP || state.mode == MODE_TIME || state.mode == MODE_FAN) &&
         elapsed(now, last_edit, SH01_MENU_TIMEOUT_MS)) {
-        if (state.mode == MODE_TIME && time_changed)
+        if (state.mode == MODE_TIME && time_changed) {
+            state.mode = MODE_FAN;
+            last_edit = now;
+            dirty = true;
+        } else if (state.mode == MODE_FAN && (time_changed || fan_changed))
             begin_drying(now);
         else {
             state.mode = MODE_VIEW;
@@ -404,7 +416,8 @@ void controller_task(uint32_t now) {
             return;
         }
         if (elapsed(now, last_checkpoint, SH01_CHECKPOINT_MS)) {
-            storage_cycle_t cycle = {state.remaining_s, state.target_c, state.hours, true};
+            storage_cycle_t cycle = {state.remaining_s, state.target_c, state.hours, true,
+                                     state.fan_percent};
             if (!storage_save(&cycle)) {
                 fault(5u, now);
                 render(now);

@@ -9,6 +9,11 @@
   приложение проекта написано самостоятельно.
 - [HC32F005 DDL Rev2.0.0](https://oss-nc-beijing-2.cecloudcs.com/doc-hc/HC32F005_DDL_Rev2.0.0.zip)
   — официальная библиотека периферии XHSC. В vendor включены только необходимые файлы.
+- HC32F005/F003 Datasheet EN Rev3.00, стр. 24–25; Reference Manual EN Rev2.50,
+  стр. 117: P34_SEL=111 — TIM1_TOG. Локальные официальные PDF сверены при 1.4.0,
+  таблица P34 также проверена визуально. P31 не имеет аппаратного выхода PWM;
+  применяется существующий SysTick 1 мс. Для звука добавлены официальные bt.c/h
+  из DDL Rev2.0.0 с исходными уведомлениями.
 - [Arm CMSIS 5.9.0](https://github.com/ARM-software/CMSIS_5/tree/5.9.0)
   — заголовки Cortex-M0+; лицензия Apache-2.0, исходные уведомления сохранены.
 - [Arm GNU Toolchain](https://developer.arm.com/Tools%20and%20Software/GNU%20Toolchain)

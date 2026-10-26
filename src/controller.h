@@ -2,10 +2,18 @@
 #define SH01_CONTROLLER_H
 #include <stdbool.h>
 #include <stdint.h>
-typedef enum { MODE_OFF, MODE_VIEW, MODE_TEMP, MODE_TIME, MODE_DRY, MODE_FAULT } factory_mode_t;
+typedef enum {
+    MODE_OFF,
+    MODE_VIEW,
+    MODE_TEMP,
+    MODE_TIME,
+    MODE_FAN,
+    MODE_DRY,
+    MODE_FAULT
+} factory_mode_t;
 typedef struct {
     factory_mode_t mode;
-    uint8_t target_c, hours, error;
+    uint8_t target_c, hours, error, fan_percent;
     uint32_t remaining_s;
     bool heater, fan, time_screen;
 } controller_state_t;

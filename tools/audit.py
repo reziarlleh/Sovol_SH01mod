@@ -84,7 +84,9 @@ def audit():
     required = {"controller_task", "sensor_task", "bus_read", "bus_write",
                 "lcd_temperature_humidity", "lcd_time", "hal_adc", "hal_clock_ok", "hal_heater",
                 "storage_init", "storage_save", "storage_disarm", "Flash_WriteWord", "Flash_SectorErase",
-                "sensor_overheated", "sensor_primary_fault"}
+                "sensor_overheated", "sensor_primary_fault", "lcd_fan_percent",
+                "actuators_tick_1ms", "actuators_error_signal", "actuators_fan",
+                "hal_fan_percent", "hal_tone_drive", "Bt_Run", "Bt_ARRSet"}
     require("firmware_version" in symbols and (VERSION + "\0").encode() in raw, "Embedded version missing")
     require(required <= symbols.keys(), "SH01 modules missing")
     forbidden = {"delay10us", "delay100us", "delay1ms"}
@@ -121,6 +123,11 @@ def audit():
         "primary_transaction_excludes_reserve": True,
         "reserve_after_confirmed_primary_failure": True,
         "error_view_ms": 5000, "power_error_blink_half_period_ms": 500,
+        "fan_percent": {"minimum": 10, "maximum": 100, "step": 10,
+                        "pwm_hz": 100, "start_boost_ms": 500},
+        "error_sound": {"frequencies_hz": [1000, 2000], "tone_ms": 150,
+                        "gap_ms": 50, "repeats_while_error_persists": False},
+        "flashed_this_version": False,
         "journal_base": "0x7000", "journal_bytes": 4096,
         "duration_presets_h": presets,
         "hardware_functional_acceptance": False, "thermal_acceptance": False,

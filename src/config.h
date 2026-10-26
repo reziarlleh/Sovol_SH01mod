@@ -1,6 +1,7 @@
 #ifndef SH01_CONFIG_H
 #define SH01_CONFIG_H
-#define FW_VERSION "1.3.1"
+#define FW_VERSION "1.4.0"
+#define SH01_FAN_START_MS 500u
 #define SH01_TEMP_MIN_C 40u
 #define SH01_TEMP_MAX_C 70u
 #define SH01_TEMP_STEP_C 5u
