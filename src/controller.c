@@ -2,6 +2,7 @@
 #include "config.h"
 #include "hal.h"
 #include "lcd.h"
+#include "profiles.h"
 #include "sensor.h"
 #include "storage.h"
 typedef struct {
@@ -13,19 +14,19 @@ static controller_state_t state;
 static uint32_t last_second, last_lcd, next_adc, last_screen;
 static uint32_t edit_seconds;
 static uint32_t last_edit;
-static uint8_t edit_target, edit_fan;
-static bool time_changed, fan_changed;
+static uint8_t edit_target, edit_hours, edit_fan;
 static bool dirty, plate_ok, plate_latched, adc_checked;
 static bool resume_pending;
-static bool error_view;
+static bool error_view, target_view;
 static uint8_t displayed_error;
 static uint16_t error_mask;
 static uint32_t error_view_at, error_blink_at;
+static uint32_t target_view_at;
 static uint32_t resume_started, last_checkpoint;
 static uint16_t plate_adc;
 static const uint8_t time_presets_h[] = {SH01_TIME_PRESET_VALUES};
 /* While editing a running cycle, choose the next offered duration above the
- * remaining time, including a partial hour; the last preset wraps to six. */
+ * remaining time, including a partial hour; the last preset wraps to one. */
 static uint8_t next_time_hours(uint32_t seconds) {
     unsigned i;
     for (i = 0u; i < sizeof time_presets_h / sizeof time_presets_h[0]; ++i)
@@ -49,8 +50,7 @@ static void update_leds(uint32_t now) {
     bool blink_on =
         !error_mask || ((uint32_t)(now - error_blink_at) / SH01_ERROR_BLINK_MS) % 2u == 0u;
     hal_led(0u, enabled && blink_on);
-    hal_led(1u, enabled && (state.mode == MODE_TEMP || state.mode == MODE_TIME ||
-                            state.mode == MODE_FAN || keys[1].stable));
+    hal_led(1u, enabled && (state.menu != MENU_NONE || keys[1].stable));
     hal_led(2u, enabled && keys[2].stable);
 }
 static void off(bool reset_cycle) {
@@ -58,13 +58,16 @@ static void off(bool reset_cycle) {
     resume_pending = false;
     hal_sound_stop();
     state.mode = MODE_OFF;
+    state.menu = MENU_NONE;
+    state.profile = 0u;
     error_view = false;
+    target_view = false;
     error_mask = 0u;
     update_leds(0u);
     lcd_enable(false);
     if (reset_cycle) {
         state.target_c = SH01_TEMP_MIN_C;
-        state.hours = SH01_TIME_MIN_H;
+        state.hours = SH01_TIME_DEFAULT_H;
         state.remaining_s = (uint32_t)state.hours * 3600u;
     }
     /* Disarm the old checkpoint before appending the OFF state.
@@ -80,6 +83,7 @@ static void wake(uint32_t now) {
     if (!storage_save(&cycle))
         state.error = 5u;
     state.mode = state.error == 5u ? MODE_FAULT : MODE_VIEW;
+    state.menu = MENU_NONE;
     state.time_screen = false;
     last_screen = now;
     lcd_enable(true);
@@ -92,6 +96,7 @@ static void fault(uint8_t error, uint32_t now) {
         error = 5u;
     state.error = error;
     state.mode = MODE_FAULT;
+    state.menu = MENU_NONE;
     if (error_view) {
         displayed_error = error;
         error_view_at = now;
@@ -141,20 +146,27 @@ static void show_error(uint32_t now) {
     error_view_at = now;
     dirty = true;
 }
-static void begin_drying(uint32_t now) {
+static void begin_drying(uint8_t target, uint8_t hours, uint32_t seconds, uint8_t fan,
+                         uint32_t now) {
     uint8_t error = safety(now);
-    state.fan_percent = edit_fan;
     if (error)
         fault(error, now);
     else {
-        storage_cycle_t cycle = {edit_seconds, state.target_c,    state.hours,
-                                 true,         state.fan_percent, false};
+        storage_cycle_t cycle = {seconds, target, hours, true, fan, false};
         if (!storage_save(&cycle)) {
             fault(5u, now);
             return;
         }
+        /* Commit the complete new cycle first. A power cut while merely
+         * browsing/editing must still restore the previous working cycle. */
+        resume_pending = false;
+        state.target_c = target;
+        state.hours = hours;
+        state.fan_percent = fan;
+        state.error = 0u;
         state.mode = MODE_DRY;
-        state.remaining_s = edit_seconds;
+        state.menu = MENU_NONE;
+        state.remaining_s = seconds;
         last_second = now;
         last_checkpoint = now;
         state.time_screen = false;
@@ -163,8 +175,9 @@ static void begin_drying(uint32_t now) {
         dirty = true;
     }
 }
-/* POWER short is emitted on release; its 2s hold has one global OFF action.
- * M/UP act once on a debounced press, including when held longer. */
+/* POWER and M distinguish a release from a 2s hold. A held M must not first
+ * execute its short action (which would close the selected profile).
+ * UP acts once on a debounced press; boot-held keys must be released first. */
 static unsigned key_event(unsigned id, uint32_t now) {
     key_t *k = &keys[id];
     bool pressed = hal_key(id);
@@ -178,29 +191,58 @@ static unsigned key_event(unsigned id, uint32_t now) {
         if (k->stable) {
             k->pressed = now;
             k->long_sent = false;
-            if (id != 0u && k->armed)
+            if (id == 2u && k->armed)
                 event = 1u;
         } else {
-            if (id == 0u && k->armed && !k->long_sent)
+            if (id != 2u && k->armed && !k->long_sent)
                 event = elapsed(k->changed, k->pressed, SH01_KEY_HOLD_MS) ? 2u : 1u;
             k->armed = true;
         }
     }
-    if (id == 0u && k->armed && k->stable && k->raw && !k->long_sent &&
+    if (id != 2u && k->armed && k->stable && k->raw && !k->long_sent &&
         elapsed(now, k->pressed, SH01_KEY_HOLD_MS)) {
         k->long_sent = true;
         event = 2u;
     }
     return event;
 }
-static void short_key(unsigned key, uint32_t now) {
-    if (resume_pending && key != 0u) {
-        resume_pending = false;
-        if (!storage_disarm()) {
-            fault(5u, now);
-            return;
+static void close_menu(uint32_t now) {
+    state.menu = MENU_NONE;
+    last_screen = now;
+    dirty = true;
+}
+static void open_profiles(void) {
+    state.profile = 0u;
+    state.menu = MENU_PROFILE;
+}
+static void mode_key(bool held, uint32_t now) {
+    if (state.menu == MENU_NONE) {
+        /* A hold begun on the main screen can only open the list, never
+         * enter CUSt or launch a cycle with the same physical press. */
+        open_profiles();
+    } else if (state.menu == MENU_PROFILE) {
+        if (!held)
+            close_menu(now);
+        else if (state.profile == 0u) {
+            edit_target = state.target_c;
+            edit_hours = state.hours;
+            edit_seconds = state.remaining_s ? state.remaining_s : (uint32_t)edit_hours * 3600u;
+            edit_fan = state.fan_percent;
+            state.menu = MENU_TEMP;
+        } else {
+            const drying_profile_t *p = profile_get(state.profile);
+            begin_drying(p->target_c, p->hours, (uint32_t)p->hours * 3600u, 100u, now);
         }
+    } else if (!held) {
+        if (state.menu == MENU_TEMP)
+            state.menu = MENU_TIME;
+        else if (state.menu == MENU_TIME)
+            state.menu = MENU_FAN;
+        else if (state.menu == MENU_FAN)
+            begin_drying(edit_target, edit_hours, edit_seconds, edit_fan, now);
     }
+}
+static void key_action(unsigned key, bool held, uint32_t now) {
     if (state.mode == MODE_OFF) {
         if (key == 0u)
             wake(now);
@@ -210,48 +252,28 @@ static void short_key(unsigned key, uint32_t now) {
     dirty = true;
     last_edit = now;
     if (key == 0u) {
+        target_view = false;
         show_error(now);
     } else if (key == 1u) {
+        target_view = false;
         error_view = false;
-        if (state.mode == MODE_FAULT) {
-            if (safety(now) || !storage_disarm()) {
-                show_error(now);
-                return;
-            }
-            state.error = 0u;
-        }
-        if (state.mode == MODE_VIEW || state.mode == MODE_DRY || state.mode == MODE_FAULT) {
-            edit_seconds = state.remaining_s ? state.remaining_s : (uint32_t)state.hours * 3600u;
-            edit_target = state.target_c;
-            edit_fan = state.fan_percent;
-            time_changed = fan_changed = false;
-            outputs(false, false);
-            if (state.mode == MODE_DRY && !storage_disarm()) {
-                fault(5u, now);
-                return;
-            }
-            state.mode = MODE_TEMP;
-        } else if (state.mode == MODE_TEMP) {
-            state.target_c = edit_target;
-            state.mode = MODE_TIME;
-        } else if (state.mode == MODE_TIME) {
-            state.mode = MODE_FAN;
-        } else if (state.mode == MODE_FAN) {
-            begin_drying(now);
-        }
+        mode_key(held, now);
     } else if (key == 2u) {
         error_view = false;
-        if (state.mode == MODE_TEMP)
+        if (state.menu == MENU_NONE) {
+            target_view = true;
+            target_view_at = now;
+        } else if (state.menu == MENU_PROFILE)
+            state.profile = (uint8_t)((state.profile + 1u) % SH01_PROFILE_COUNT);
+        else if (state.menu == MENU_TEMP)
             edit_target = edit_target >= SH01_TEMP_MAX_C
                               ? SH01_TEMP_MIN_C
                               : (uint8_t)(edit_target + SH01_TEMP_STEP_C);
-        else if (state.mode == MODE_TIME) {
-            state.hours = next_time_hours(edit_seconds);
-            edit_seconds = (uint32_t)state.hours * 3600u;
-            time_changed = true;
-        } else if (state.mode == MODE_FAN) {
+        else if (state.menu == MENU_TIME) {
+            edit_hours = next_time_hours(edit_seconds);
+            edit_seconds = (uint32_t)edit_hours * 3600u;
+        } else if (state.menu == MENU_FAN) {
             edit_fan = edit_fan >= 100u ? 10u : (uint8_t)(edit_fan + 10u);
-            fan_changed = true;
         }
     }
 }
@@ -272,7 +294,12 @@ static void render(uint32_t now) {
         last_edit = now;
         dirty = true;
     }
-    if (!error_view &&
+    if (target_view && elapsed(now, target_view_at, SH01_TARGET_VIEW_MS)) {
+        target_view = false;
+        last_screen = now;
+        dirty = true;
+    }
+    if (!error_view && !target_view && state.menu == MENU_NONE &&
         (state.mode == MODE_VIEW || state.mode == MODE_DRY || state.mode == MODE_FAULT) &&
         elapsed(now, last_screen, SH01_SCREEN_INTERVAL_MS)) {
         uint32_t pages = (uint32_t)(now - last_screen) / SH01_SCREEN_INTERVAL_MS;
@@ -287,11 +314,15 @@ static void render(uint32_t now) {
     last_lcd = now;
     if (error_view)
         lcd_error(displayed_error);
-    else if (state.mode == MODE_TEMP)
+    else if (target_view)
+        lcd_set_temperature(state.target_c);
+    else if (state.menu == MENU_PROFILE)
+        lcd_profile(profile_get(state.profile)->name);
+    else if (state.menu == MENU_TEMP)
         lcd_set_temperature(edit_target);
-    else if (state.mode == MODE_TIME)
+    else if (state.menu == MENU_TIME)
         lcd_time(edit_seconds, true, false);
-    else if (state.mode == MODE_FAN)
+    else if (state.menu == MENU_FAN)
         lcd_fan_percent(edit_fan);
     else if (state.time_screen)
         lcd_time(state.remaining_s, false, state.mode == MODE_DRY);
@@ -307,7 +338,7 @@ void controller_init(uint32_t now) {
     state = (controller_state_t){0};
     state.mode = MODE_VIEW;
     state.target_c = SH01_TEMP_MIN_C;
-    state.hours = SH01_TIME_MIN_H;
+    state.hours = SH01_TIME_DEFAULT_H;
     state.fan_percent = 100u;
     state.remaining_s = (uint32_t)state.hours * 3600u;
     storage_init();
@@ -330,13 +361,15 @@ void controller_init(uint32_t now) {
     }
     resume_started = last_checkpoint = now;
     error_view = false;
+    target_view = false;
     error_mask = 0u;
     displayed_error = 0u;
     error_view_at = error_blink_at = now;
+    target_view_at = now;
     edit_seconds = state.remaining_s;
     edit_target = state.target_c;
+    edit_hours = state.hours;
     edit_fan = state.fan_percent;
-    time_changed = fan_changed = false;
     last_edit = now;
     for (i = 0u; i < 3u; ++i) {
         keys[i] = (key_t){0};
@@ -375,8 +408,8 @@ void controller_task(uint32_t now) {
         next_adc = now + 250u;
     }
     for (i = 0u; i < 3u; ++i)
-        if (event[i] == 1u) {
-            short_key(i, now);
+        if (event[i]) {
+            key_action(i, event[i] == 2u, now);
             break;
         }
     if (resume_pending) {
@@ -396,24 +429,13 @@ void controller_task(uint32_t now) {
             fault(safety(now), now);
         }
     }
-    /* A changed TIME advances to FAN on timeout, leaving five seconds for
-     * speed adjustment. FAN confirms a changed cycle after its own timeout. */
-    if (!error_view &&
-        (state.mode == MODE_TEMP || state.mode == MODE_TIME || state.mode == MODE_FAN) &&
-        elapsed(now, last_edit, SH01_MENU_TIMEOUT_MS)) {
-        if (state.mode == MODE_TIME && time_changed) {
-            state.mode = MODE_FAN;
-            last_edit = now;
-            dirty = true;
-        } else if (state.mode == MODE_FAN && (time_changed || fan_changed))
-            begin_drying(now);
-        else {
-            state.mode = MODE_VIEW;
-            state.time_screen = false;
-            last_screen = now;
-            dirty = true;
-        }
-    }
+    /* Abandoning any page cancels only the UI draft. Never start a heater
+     * on timeout, pause a running cycle, or time out a key still being held. */
+    if (keys[1].raw || keys[2].raw)
+        last_edit = now;
+    if (!error_view && state.menu != MENU_NONE &&
+        elapsed(now, last_edit, SH01_MENU_TIMEOUT_MS))
+        close_menu(now);
     if (state.mode == MODE_DRY) {
         uint8_t error = safety(now);
         uint32_t seconds;

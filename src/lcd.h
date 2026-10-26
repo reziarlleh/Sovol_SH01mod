@@ -10,4 +10,5 @@ void lcd_set_temperature(uint8_t temperature);
 void lcd_time(uint32_t seconds, bool setting, bool work);
 void lcd_error(uint8_t code);
 void lcd_fan_percent(uint8_t percent);
+void lcd_profile(const char *name);
 #endif

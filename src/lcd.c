@@ -133,3 +133,28 @@ void lcd_fan_percent(uint8_t percent) {
     ram[14] = 2u; /* percent only */
     flush();
 }
+/* Seven-segment approximations; I shares the segments of 1, T uses the t glyph. */
+static uint8_t letter(char c) {
+    switch (c) {
+    case '1': case 'I': return 0x06u;
+    case '2': return 0x5Bu;
+    case 'A': return 0x77u;
+    case 'b': return 0x7Cu;
+    case 'C': return 0x39u;
+    case 'E': return 0x79u;
+    case 'G': return 0x3Du;
+    case 'H': return 0x76u;
+    case 'L': return 0x38u;
+    case 'P': return 0x73u;
+    case 'S': return 0x6Du;
+    case 'T': case 't': return 0x78u;
+    case 'U': return 0x3Eu;
+    default: return 0u;
+    }
+}
+void lcd_profile(const char *name) {
+    clear();
+    for (unsigned i = 0u; i < 4u && name[i]; ++i)
+        digit(i, letter(name[i]));
+    flush();
+}

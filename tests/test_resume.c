@@ -87,6 +87,7 @@ void lcd_temperature_humidity(int16_t t, uint16_t rh, bool work) {
     (void)work;
 }
 void lcd_missing(void) {}
+void lcd_profile(const char *name) { (void)name; }
 void lcd_set_temperature(uint8_t t) { (void)t; }
 void lcd_time(uint32_t t, bool setting, bool work) {
     (void)t;
@@ -116,12 +117,29 @@ static void reboot(void) {
     CHECK(!heater && !fan);
     tick(0u);
 }
-int main(void) {
+
+static void hold(unsigned key) {
+    uint32_t t = now + 10u;
+    keys[key] = true;
+    tick(t);
+    tick(t + 30u);
+    tick(t + 2030u);
+    keys[key] = false;
+    tick(t + 2050u);
+    tick(t + 2080u);
+}
+static void enter_custom(void) {
+    press(1u);
+    CHECK(controller_get()->menu == MENU_PROFILE && controller_get()->profile == 0u);
+    hold(1u);
+    CHECK(controller_get()->menu == MENU_TEMP);
+}
+static void test_checkpoint_off_and_fault(void) {
     storage_cycle_t loaded;
     memset(journal, 255, sizeof journal);
     reboot();
     CHECK(controller_get()->mode == MODE_VIEW);
-    press(1u);
+    enter_custom();
     press(2u);
     press(1u);
     for (unsigned i = 0u; i < 9u; ++i)
@@ -141,11 +159,9 @@ int main(void) {
     CHECK(heater && fan && controller_get()->remaining_s == saved);
     CHECK(fan_percent == 30u && loaded.fan_percent == 30u);
     CHECK(controller_get()->target_c == 45u && controller_get()->hours == 96u);
-    uint32_t t = now + 10u;
-    keys[0] = true;
-    tick(t);
-    tick(t + 30u);
-    tick(t + 2030u);
+    enter_custom(); /* Even a draft may not alter the confirmed OFF reset. */
+    press(2u);
+    hold(0u);
     CHECK(!heater && !fan && !light);
     CHECK(storage_load(&loaded) && loaded.powered_off && !loaded.running);
     CHECK(loaded.remaining_s == 21600u && loaded.target_c == 40u && loaded.hours == 6u &&
@@ -158,13 +174,12 @@ int main(void) {
     CHECK(!lcd_wakes && !alarms && !leds[0] && !leds[1] && !leds[2]);
     CHECK(controller_get()->target_c == 40u && controller_get()->remaining_s == stopped);
     healthy = true;
-    reboot(); /* OFF survives repeated power interruptions as well. */
+    reboot();
     CHECK(controller_get()->mode == MODE_OFF && !lcd_wakes && !light);
     press(0u);
     CHECK(controller_get()->mode == MODE_VIEW && light && !heater && !fan);
-    CHECK(storage_load(&loaded) && !loaded.powered_off && !loaded.running &&
-          loaded.remaining_s == stopped);
-    press(1u);
+    CHECK(storage_load(&loaded) && !loaded.powered_off && !loaded.running);
+    enter_custom();
     press(1u);
     press(1u);
     press(1u);
@@ -175,9 +190,73 @@ int main(void) {
     healthy = true;
     reboot();
     CHECK(controller_get()->mode == MODE_VIEW && !heater);
-    printf("resume integration: real controller + journal, checkpoint, cold "
-           "restart, stop, fault: "
-           "%u checks passed\n",
-           checks);
+}
+static void test_power_cut_while_browsing_or_editing(void) {
+    storage_cycle_t loaded;
+    for (unsigned page = 0u; page < 4u; ++page) {
+        memset(journal, 255, sizeof journal);
+        storage_init();
+        storage_cycle_t old = {20000u, 55u, 8u, true, 30u, false};
+        CHECK(storage_save(&old));
+        reboot();
+        CHECK(heater && fan_percent == 30u);
+        press(1u);
+        if (page) {
+            hold(1u);
+            for (unsigned i = 1u; i < page; ++i)
+                press(1u);
+        }
+        press(2u);
+        tick(now + 1000u);
+        CHECK(controller_get()->mode == MODE_DRY && fan_percent == 30u);
+        CHECK(controller_get()->target_c == 55u && controller_get()->hours == 8u);
+        CHECK(storage_load(&loaded) && loaded.running && loaded.remaining_s == old.remaining_s);
+        reboot();
+        CHECK(controller_get()->menu == MENU_NONE && controller_get()->mode == MODE_DRY);
+        CHECK(controller_get()->target_c == 55u && controller_get()->hours == 8u &&
+              controller_get()->remaining_s == 20000u && fan_percent == 30u);
+    }
+}
+static void test_short_cycles_survive_checkpoint_and_reboot(void) {
+    storage_cycle_t loaded;
+    for (unsigned hours = 1u; hours <= 5u; ++hours) {
+        memset(journal, 255, sizeof journal);
+        reboot();
+        enter_custom();
+        press(1u);
+        /* 6 -> ... -> 96 -> 1, then choose the required short duration. */
+        for (unsigned i = 0u; i < 9u + hours; ++i)
+            press(2u);
+        press(1u);
+        press(1u);
+        CHECK(controller_get()->mode == MODE_DRY && controller_get()->hours == hours);
+        CHECK(controller_get()->remaining_s == (uint32_t)hours * 3600u);
+        tick(now + 60000u);
+        CHECK(storage_load(&loaded) && loaded.running && loaded.hours == hours);
+        uint32_t saved = loaded.remaining_s;
+        reboot();
+        CHECK(controller_get()->mode == MODE_DRY && controller_get()->hours == hours &&
+              controller_get()->remaining_s == saved && heater && fan_percent == 100u);
+    }
+    /* HIPS and PA12 must retain their exact 3/4-hour profile durations too. */
+    for (unsigned profile = 3u; profile <= 4u; ++profile) {
+        memset(journal, 255, sizeof journal);
+        reboot();
+        press(1u);
+        for (unsigned i = 0u; i < profile; ++i)
+            press(2u);
+        hold(1u);
+        CHECK(controller_get()->target_c == 70u && controller_get()->hours == profile);
+        reboot();
+        CHECK(controller_get()->mode == MODE_DRY && controller_get()->target_c == 70u &&
+              controller_get()->hours == profile && fan_percent == 100u);
+    }
+}
+int main(void) {
+    test_checkpoint_off_and_fault();
+    test_power_cut_while_browsing_or_editing();
+    test_short_cycles_survive_checkpoint_and_reboot();
+    printf("resume integration: real controller + journal, checkpoint, drafts, short "
+           "profiles, cold restart, stop, fault: %u checks passed\n", checks);
     return 0;
 }

@@ -89,6 +89,25 @@ int main(void) {
     lcd_error(4u);
     CHECK(digit(0) == 0x79u && digit(1) == 0u && digit(2) == 0u && digit(3) == 0x66u &&
           ram[14] == 0u);
+    static const char names[][5] = {"CUSt", "AbS", "ASA", "HIPS", "PA12", "PCtG", "PEtG", "PLA", "TPU"};
+    static const uint8_t masks[][4] = {
+        {0x39u, 0x3Eu, 0x6Du, 0x78u}, {0x77u, 0x7Cu, 0x6Du, 0u},
+        {0x77u, 0x6Du, 0x77u, 0u}, {0x76u, 0x06u, 0x73u, 0x6Du},
+        {0x73u, 0x77u, 0x06u, 0x5Bu}, {0x73u, 0x39u, 0x78u, 0x3Du},
+        {0x73u, 0x79u, 0x78u, 0x3Du}, {0x73u, 0x38u, 0x77u, 0u},
+        {0x78u, 0x73u, 0x3Eu, 0u},
+    };
+    for (unsigned p = 0u; p < 9u; ++p) {
+        /* Start from a screen with units, WORK and colon: profile labels
+         * must clear every unrelated icon and pad their fourth position. */
+        lcd_time(21600u, true, true);
+        lcd_profile(names[p]);
+        for (unsigned i = 0u; i < 4u; ++i)
+            CHECK(digit(i) == masks[p][i]);
+        for (unsigned a = 0u; a < 22u; ++a)
+            if (a > 5u && a != 13u)
+                CHECK(ram[a] == 0u);
+    }
     lcd_enable(false);
     CHECK(!backlight && commands[command_count - 2u] == 4u && commands[command_count - 1u] == 0u);
     lcd_enable(true);

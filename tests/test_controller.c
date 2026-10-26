@@ -2,6 +2,7 @@
 #include "controller.h"
 #include "hal.h"
 #include "lcd.h"
+#include "profiles.h"
 #include "sensor.h"
 #include "storage.h"
 #include <stdio.h>
@@ -22,6 +23,7 @@ static uint16_t adc_value = 20480u;
 static uint32_t now;
 static sensor_sample_t sample;
 static unsigned screen, shown;
+static char shown_name[5];
 static bool leds[3];
 static unsigned led_changes[3];
 static storage_cycle_t persisted;
@@ -50,7 +52,7 @@ bool storage_disarm(void) {
     persisted.running = false;
     return true;
 }
-enum { SCREEN_T_RH, SCREEN_TEMP, SCREEN_TIME, SCREEN_ERROR, SCREEN_MISSING, SCREEN_FAN };
+enum { SCREEN_T_RH, SCREEN_TEMP, SCREEN_TIME, SCREEN_ERROR, SCREEN_MISSING, SCREEN_FAN, SCREEN_PROFILE };
 void hal_heater(bool on) { heater = on; }
 void hal_fan_percent(uint8_t percent) {
     fan_percent = percent;
@@ -112,6 +114,10 @@ void lcd_fan_percent(uint8_t percent) {
     screen = SCREEN_FAN;
     shown = percent;
 }
+void lcd_profile(const char *name) {
+    screen = SCREEN_PROFILE;
+    memcpy(shown_name, name, sizeof shown_name);
+}
 static const controller_state_t *view(void) { return controller_get(); }
 static void task(uint32_t t) {
     now = t;
@@ -156,58 +162,244 @@ static void click(unsigned key) {
     task(start + 80u);
     task(start + 110u);
 }
-/* Older scenarios retain their intent but explicitly confirm the new FAN page.
- * The dedicated fan scenario below exercises individual M presses. */
-static void next_setting_or_start(void) {
+
+static void hold(unsigned key) {
+    uint32_t at = now + 10u;
+    contacts[key] = true;
+    task(at);
+    task(at + 30u);
+    task(at + 2030u);
+    contacts[key] = false;
+    task(at + 2050u);
+    task(at + 2080u);
+}
+static void enter_custom(void) {
     click(1u);
-    if (view()->mode == MODE_FAN) {
-        CHECK(screen == SCREEN_FAN && !heater && !fan);
-        click(1u);
-    }
+    CHECK(view()->menu == MENU_PROFILE && view()->profile == 0u);
+    hold(1u);
+    CHECK(view()->menu == MENU_TEMP);
+}
+static void choose_hours(unsigned hours) {
+    CHECK(view()->menu == MENU_TIME);
+    for (unsigned i = 0u; shown != hours * 3600u && i < 15u; ++i)
+        click(2u);
+    CHECK(shown == hours * 3600u);
 }
 static void start(void) {
-    next_setting_or_start();
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_DRY);
+    enter_custom();
+    click(1u);
+    click(1u);
+    click(1u);
+    CHECK(view()->mode == MODE_DRY && view()->menu == MENU_NONE);
 }
-static void test_menu(void) {
-    unsigned i;
+static void start_45_96_30(void) {
+    enter_custom();
+    click(2u);
+    click(1u);
+    choose_hours(96u);
+    click(1u);
+    click(2u);
+    click(2u);
+    click(2u);
+    click(1u);
+    CHECK(view()->mode == MODE_DRY && view()->target_c == 45u && view()->hours == 96u &&
+          view()->fan_percent == 30u && heater && fan);
+}
+static void choose_profile(unsigned index) {
+    click(1u);
+    CHECK(view()->menu == MENU_PROFILE && view()->profile == 0u);
+    for (unsigned i = 0u; i < index; ++i)
+        click(2u);
+    hold(1u);
+}
+static void test_profiles_order_and_cancel(void) {
+    static const char names[][5] = {"CUSt", "AbS", "ASA", "HIPS", "PA12", "PCtG", "PEtG", "PLA", "TPU"};
     ++scenarios;
     reset_at(0u);
     CHECK(view()->mode == MODE_VIEW && view()->target_c == 40u && view()->hours == 6u);
-    CHECK(screen == SCREEN_T_RH && !heater);
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_TEMP && screen == SCREEN_TEMP);
-    for (i = 0u; i < 6u; ++i)
+    CHECK(view()->menu == MENU_NONE && screen == SCREEN_T_RH);
+    unsigned saved = saves;
+    click(1u);
+    for (unsigned i = 0u; i < 9u; ++i) {
+        CHECK(screen == SCREEN_PROFILE && !strcmp(shown_name, names[i]));
+        CHECK(view()->profile == i && view()->mode == MODE_VIEW && saves == saved);
+        CHECK(!heater && !fan && persisted.target_c == 40u && persisted.hours == 6u);
         click(2u);
-    CHECK(shown == 70u && !heater);
+    }
+    CHECK(!strcmp(shown_name, "CUSt") && view()->profile == 0u);
     click(2u);
-    CHECK(shown == 40u);
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_TIME && shown == 21600u);
-    for (i = 0u; i < 3u; ++i)
-        click(2u);
-    CHECK(view()->hours == 12u && shown == 43200u);
-    for (i = 0u; i < 7u; ++i)
-        click(2u);
-    CHECK(view()->hours == 6u);
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_DRY && heater && fan);
-    click(0u);
-    CHECK(screen == SCREEN_ERROR && shown == 0u && view()->mode == MODE_DRY && heater);
-    task(now + SH01_ERROR_VIEW_MS);
-    CHECK(screen == SCREEN_T_RH);
+    click(1u); /* A short M cancels rather than launching AbS. */
+    CHECK(view()->menu == MENU_NONE && view()->mode == MODE_VIEW && !heater && !fan);
+    CHECK(saves == saved && view()->remaining_s == 21600u);
+    click(1u);
+    CHECK(!strcmp(shown_name, "CUSt") && view()->profile == 0u);
+    CHECK(!strcmp(profile_get(255u)->name, "CUSt"));
 }
-static void test_temperature_and_cutoff(void) {
+static void test_all_preset_starts(void) {
+    static const uint8_t temperatures[] = {0u, 70u, 70u, 70u, 70u, 65u, 60u, 45u, 60u};
+    static const uint8_t hours[] = {0u, 6u, 8u, 3u, 4u, 8u, 6u, 6u, 6u};
+    ++scenarios;
+    for (unsigned i = 1u; i < 9u; ++i) {
+        reset_at(0u);
+        choose_profile(i);
+        CHECK(view()->mode == MODE_DRY && view()->menu == MENU_NONE && heater && fan);
+        CHECK(view()->target_c == temperatures[i] && view()->hours == hours[i]);
+        CHECK(view()->remaining_s == (uint32_t)hours[i] * 3600u);
+        CHECK(fan_percent == 100u && persisted.fan_percent == 100u && persisted.running);
+        CHECK(persisted.target_c == temperatures[i] && persisted.hours == hours[i] && saves == 2u);
+        task(now + 3000u); /* Release did not produce a second short M/menu. */
+        CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY);
+    }
+    reset_at(0u);
+    start_45_96_30();
+    choose_profile(1u);
+    CHECK(view()->target_c == 70u && view()->hours == 6u && fan_percent == 100u);
+}
+static void test_custom_drafts_and_all_values(void) {
+    static const uint8_t hours[] = {6u, 8u, 10u, 12u, 18u, 24u, 32u, 48u, 72u, 96u, 1u, 2u, 3u, 4u, 5u};
     ++scenarios;
     reset_at(0u);
-    next_setting_or_start();
-    for (unsigned i = 0u; i < 6u; ++i)
+    enter_custom();
+    CHECK(screen == SCREEN_TEMP && shown == 40u && !heater && !fan);
+    for (unsigned t = 45u; t <= 70u; t += 5u) {
         click(2u);
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(view()->target_c == 70u && heater);
+        CHECK(shown == t && view()->target_c == 40u && saves == 1u);
+    }
+    click(2u);
+    CHECK(shown == 40u);
+    click(2u);
+    click(1u);
+    CHECK(view()->menu == MENU_TIME && screen == SCREEN_TIME);
+    for (unsigned i = 0u; i < sizeof hours; ++i) {
+        CHECK(shown == (uint32_t)hours[i] * 3600u);
+        CHECK(view()->hours == 6u && view()->remaining_s == 21600u && saves == 1u);
+        click(2u);
+    }
+    CHECK(shown == 21600u);
+    choose_hours(1u);
+    click(1u);
+    CHECK(view()->menu == MENU_FAN && shown == 100u);
+    for (unsigned percent = 10u; percent <= 100u; percent += 10u) {
+        click(2u);
+        CHECK(shown == percent && view()->fan_percent == 100u && !heater && !fan);
+    }
+    click(2u);
+    click(2u);
+    click(2u);
+    CHECK(shown == 30u && persisted.target_c == 40u && !persisted.running);
+    click(1u);
+    CHECK(view()->mode == MODE_DRY && view()->menu == MENU_NONE);
+    CHECK(view()->target_c == 45u && view()->hours == 1u && view()->remaining_s == 3600u);
+    CHECK(fan_percent == 30u && persisted.running && persisted.target_c == 45u &&
+          persisted.hours == 1u && persisted.fan_percent == 30u);
+}
+static void test_running_browse_and_edit_are_passive(void) {
+    ++scenarios;
+    reset_at(0u);
+    start_45_96_30();
+    task(now + 60000u);
+    uint32_t remaining = view()->remaining_s;
+    unsigned saved = saves;
+    click(1u);
+    click(2u);
+    task(now + 3000u);
+    CHECK(view()->mode == MODE_DRY && heater && fan && fan_percent == 30u);
+    CHECK(view()->target_c == 45u && view()->hours == 96u && saves == saved && persisted.running);
+    CHECK(view()->remaining_s == remaining - 3u && view()->menu == MENU_PROFILE);
+    click(1u);
+    CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY && heater && fan);
+    enter_custom();
+    click(2u); /* Draft 50 C must not alter the active 45 C controller. */
+    sample.temperature_x10 = 460;
+    task(now + 250u);
+    CHECK(!heater && fan && view()->target_c == 45u);
+    click(1u);
+    choose_hours(1u);
+    click(1u);
+    click(2u); /* Draft 40% must not alter the active 30%. */
+    CHECK(shown == 40u && fan_percent == 30u && view()->hours == 96u);
+    remaining = view()->remaining_s;
+    task(now + 5000u);
+    CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY);
+    CHECK(view()->remaining_s == remaining - 5u && fan_percent == 30u && saves == saved);
+    CHECK(persisted.target_c == 45u && persisted.hours == 96u && persisted.fan_percent == 30u);
+}
+static void test_timeout_never_starts(void) {
+    ++scenarios;
+    for (unsigned page = 0u; page < 4u; ++page) {
+        reset_at(0u);
+        click(1u);
+        if (page) {
+            hold(1u);
+            for (unsigned i = 1u; i < page; ++i)
+                click(1u);
+        }
+        click(2u); /* Include changed values on TEMP, TIME and FAN. */
+        task(now + 5000u);
+        CHECK(view()->menu == MENU_NONE && view()->mode == MODE_VIEW && !heater && !fan);
+        CHECK(view()->target_c == 40u && view()->hours == 6u && view()->fan_percent == 100u);
+        CHECK(saves == 1u && !persisted.running);
+    }
+}
+static void test_hold_debounce_and_boot_keys(void) {
+    ++scenarios;
+    reset_at(0xFFFFFF00u);
+    hold(1u); /* A hold begun on main must only open CUSt. */
+    CHECK(view()->menu == MENU_PROFILE && view()->mode == MODE_VIEW && !heater);
+    click(2u);
+    uint32_t at = now + 10u;
+    contacts[1] = true;
+    task(at);
+    task(at + 30u);
+    task(at + 2029u);
+    CHECK(view()->menu == MENU_PROFILE && view()->mode == MODE_VIEW && !heater);
+    task(at + 2030u);
+    CHECK(view()->mode == MODE_DRY && view()->menu == MENU_NONE && heater);
+    task(at + 7000u); /* A held M is one action, not repeated starts. */
+    CHECK(saves == 2u && view()->menu == MENU_NONE);
+    contacts[1] = false;
+    task(at + 7010u);
+    task(at + 7040u);
+    CHECK(saves == 2u && view()->mode == MODE_DRY && view()->menu == MENU_NONE);
+    reset_at(0u);
+    click(1u);
+    click(2u);
+    at = now + 10u;
+    contacts[1] = true;
+    task(at);
+    task(at + 30u);
+    contacts[1] = false;
+    task(at + 2029u); /* Released one ms before the hold threshold. */
+    task(at + 2059u);
+    CHECK(view()->menu == MENU_NONE && !heater && !persisted.running);
+    reset_at(0u);
+    at = now;
+    for (unsigned i = 0u; i < 20u; ++i) {
+        contacts[1] = !contacts[1];
+        task(at + i * 3u);
+    }
+    contacts[1] = false;
+    task(at + 100u);
+    task(at + 150u);
+    CHECK(view()->menu == MENU_NONE);
+    contacts[1] = true;
+    controller_init(now);
+    task(now + 10000u);
+    CHECK(view()->menu == MENU_NONE && !heater);
+    contacts[1] = false;
+    task(now + 10u);
+    task(now + 30u);
+    CHECK(view()->menu == MENU_NONE);
+    click(1u);
+    hold(1u);
+    CHECK(view()->menu == MENU_TEMP);
+    hold(1u);
+    CHECK(view()->menu == MENU_TEMP && !heater); /* Long M does not advance CUSt pages. */
+}
+static void test_temperature_plate_and_faults(void) {
+    ++scenarios;
+    reset_at(0u);
+    choose_profile(1u);
     sample.temperature_x10 = 700;
     task(now + 250u);
     CHECK(heater);
@@ -217,17 +409,13 @@ static void test_temperature_and_cutoff(void) {
     sample.temperature_x10 = 729;
     task(now + 250u);
     CHECK(view()->mode == MODE_DRY);
+    click(1u);
     sample.temperature_x10 = 730;
     task(now + 250u);
-    CHECK(view()->mode == MODE_FAULT && view()->error == 4u && screen != SCREEN_ERROR);
-    click(0u);
-    CHECK(screen == SCREEN_ERROR && shown == 4u && view()->mode == MODE_FAULT);
-}
-static void test_plate_hysteresis_and_faults(void) {
-    ++scenarios;
+    CHECK(view()->mode == MODE_FAULT && view()->error == 4u && view()->menu == MENU_NONE);
+    CHECK(!heater && !fan && !persisted.running);
     reset_at(0u);
     start();
-    CHECK(heater);
     adc_value = 1418u;
     task(now + 250u);
     CHECK(!heater && fan);
@@ -239,339 +427,179 @@ static void test_plate_hysteresis_and_faults(void) {
     CHECK(heater);
     adc_value = 40000u;
     task(now + 250u);
-    CHECK(view()->error == 2u && !heater);
-    reset_at(0u);
-    healthy = false;
-    next_setting_or_start();
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(view()->error == 1u && !heater);
-    reset_at(0u);
-    adc_good = false;
-    next_setting_or_start();
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(view()->error == 2u && !heater);
-    reset_at(0u);
-    start();
-    primary_fault = true; /* Reserve warning alone does not stop a valid source. */
-    task(now + 10u);
-    CHECK(view()->error == 0u && heater && fan && persisted.running);
+    CHECK(view()->error == 2u && !heater && !fan);
+    for (unsigned error = 1u; error <= 4u; ++error) {
+        reset_at(0u);
+        if (error == 1u) healthy = false;
+        if (error == 2u) adc_good = false;
+        if (error == 3u) sample.temperature_x10 = -100;
+        if (error == 4u) sample.temperature_x10 = 730;
+        choose_profile(1u);
+        CHECK(view()->mode == MODE_FAULT && view()->error == error && !heater && !fan);
+        CHECK(!persisted.running && view()->target_c == 40u && view()->hours == 6u);
+    }
 }
-static void test_off_wake_and_boot_hold(void) {
-    uint32_t press;
+static void test_off_wake_and_draft_reset(void) {
     ++scenarios;
     reset_at(0u);
-    start();
-    press = now + 10u;
-    contacts[0] = true;
-    task(press);
-    task(press + 30u);
-    task(press + 2029u);
-    CHECK(view()->mode == MODE_DRY);
-    task(press + 2030u);
-    CHECK(view()->mode == MODE_OFF);
-    contacts[0] = false;
-    task(press + 2050u);
-    task(press + 2080u);
-    CHECK(view()->mode == MODE_OFF);
+    start_45_96_30();
+    enter_custom();
+    click(2u);
+    click(1u);
+    choose_hours(1u);
+    click(1u);
+    click(2u);
+    hold(0u);
+    CHECK(view()->mode == MODE_OFF && view()->menu == MENU_NONE);
+    CHECK(view()->target_c == 40u && view()->hours == 6u && view()->remaining_s == 21600u);
+    CHECK(view()->fan_percent == 30u && persisted.powered_off && !persisted.running);
+    controller_init(0u);
+    now = 0u;
+    task(0u);
+    CHECK(view()->mode == MODE_OFF && !light && !heater && !fan);
+    click(1u);
+    hold(1u);
+    click(2u);
+    CHECK(view()->mode == MODE_OFF && !light);
     click(0u);
-    CHECK(view()->mode == MODE_VIEW && !heater && light);
+    CHECK(view()->mode == MODE_VIEW && light && !heater && !fan);
+    CHECK(view()->remaining_s == 21600u && view()->fan_percent == 30u);
     contacts[0] = true;
     controller_init(now);
     task(now + 3000u);
-    CHECK(view()->mode == MODE_VIEW);
+    CHECK(view()->mode == MODE_VIEW && light);
     contacts[0] = false;
     task(now + 10u);
     task(now + 30u);
     CHECK(view()->mode == MODE_VIEW);
 }
-static void test_timer_pause_expiry_and_wrap(void) {
-    uint32_t remaining;
+static void test_partial_hours_and_long_countdown(void) {
     ++scenarios;
     reset_at(0xFFFFF000u);
     start();
-    remaining = view()->remaining_s;
-    task(now + 3000u);
-    CHECK(view()->remaining_s == remaining - 3u);
-    next_setting_or_start();
-    remaining = view()->remaining_s;
-    CHECK(view()->mode == MODE_TEMP && !heater);
-    task(now + 3000u);
-    CHECK(view()->remaining_s == remaining);
-    next_setting_or_start();
-    CHECK(shown == remaining);
-    next_setting_or_start();
-    CHECK(view()->remaining_s == remaining && heater);
-    task(now + remaining * 1000u);
-    CHECK(view()->mode == MODE_OFF && !heater && !fan);
-}
-static void test_menu_timeout_and_bounce(void) {
-    uint32_t at;
-    ++scenarios;
-    reset_at(0u);
-    next_setting_or_start();
-    click(2u);
-    task(now + 5000u);
-    CHECK(view()->mode == MODE_VIEW && view()->target_c == 40u && !heater);
-    next_setting_or_start();
-    next_setting_or_start();
-    task(now + 5000u);
-    CHECK(view()->mode == MODE_VIEW && !heater);
-    next_setting_or_start();
-    next_setting_or_start();
-    click(2u);
-    task(now + 5000u);
-    CHECK(view()->mode == MODE_FAN && !heater);
-    task(now + 5000u);
-    CHECK(view()->mode == MODE_DRY && view()->remaining_s == 28800u && heater);
-    reset_at(0u);
-    at = now;
-    for (unsigned i = 0u; i < 20u; ++i) {
-        contacts[1] = !contacts[1];
-        task(at + i * 3u);
-    }
-    contacts[1] = false;
-    task(at + 100u);
-    task(at + 150u);
-    CHECK(view()->mode == MODE_VIEW);
-}
-static void test_held_menu_and_fault_latch(void) {
-    uint32_t at;
-    ++scenarios;
-    reset_at(0u);
-    at = now + 10u;
-    contacts[1] = true;
-    task(at);
-    task(at + 30u);
-    CHECK(view()->mode == MODE_TEMP);
-    task(at + 2500u);
-    CHECK(view()->mode == MODE_TEMP);
-    contacts[1] = false;
-    task(at + 2600u);
-    task(at + 2630u);
-    CHECK(view()->mode == MODE_TEMP);
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(heater);
-    healthy = false;
-    task(now + 10u);
-    CHECK(view()->mode == MODE_FAULT && !heater);
-    healthy = true;
     task(now + 1000u);
-    CHECK(view()->mode == MODE_FAULT && !heater);
-    click(0u);
-    CHECK(view()->mode == MODE_FAULT && screen == SCREEN_ERROR && shown == 1u && !heater);
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_TEMP && !heater);
-    reset_at(0u);
-    sample.temperature_x10 = -100;
-    next_setting_or_start();
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(view()->error == 3u && !heater);
-}
-static void test_leds_do_not_flicker(void) {
-    uint32_t epoch;
-    unsigned power_changes, mode_changes;
-    ++scenarios;
-    reset_at(0u);
-    CHECK(leds[0] && !leds[1] && !leds[2]);
-    power_changes = led_changes[0];
-    for (unsigned i = 1u; i <= 1000u; ++i)
-        task(i);
-    CHECK(led_changes[0] == power_changes && !leds[1] && !leds[2]);
-    next_setting_or_start();
-    CHECK(leds[1]);
-    mode_changes = led_changes[1];
-    epoch = now;
-    for (unsigned i = 1u; i <= 1000u; ++i)
-        task(epoch + i);
-    CHECK(led_changes[0] == power_changes && led_changes[1] == mode_changes);
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_DRY && leds[0] && !leds[1]);
-}
-static void test_time_presets_and_partial_hour(void) {
-    static const uint8_t expected[] = {6u, 8u, 10u, 12u, 18u, 24u, 32u, 48u, 72u, 96u};
-    ++scenarios;
-    reset_at(0u);
-    next_setting_or_start();
-    next_setting_or_start();
-    for (unsigned i = 0u; i < sizeof expected; ++i) {
-        CHECK(view()->hours == expected[i] && shown == (uint32_t)expected[i] * 3600u);
-        CHECK(!heater && !fan);
-        click(2u);
-    }
-    CHECK(view()->hours == 6u && shown == 21600u);
-    next_setting_or_start();
-    task(now + 1000u);
-    CHECK(view()->remaining_s == 21599u);
-    next_setting_or_start();
-    next_setting_or_start();
+    enter_custom();
+    click(1u);
+    CHECK(shown < 21600u && shown > 21590u);
     click(2u);
-    CHECK(view()->hours == 6u && shown == 21600u);
+    CHECK(shown == 21600u); /* First greater preset, not eight hours. */
     click(2u);
-    CHECK(view()->hours == 8u && shown == 28800u);
-    next_setting_or_start();
-    task(now + 1000u);
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(shown == 28799u);
-    click(2u);
-    CHECK(view()->hours == 8u && shown == 28800u);
-    click(2u);
-    CHECK(view()->hours == 10u && shown == 36000u);
-}
-static void test_96_hour_countdown_and_wrap(void) {
-    uint32_t started;
-    ++scenarios;
-    reset_at(0xFFFFF000u);
-    next_setting_or_start();
-    next_setting_or_start();
-    for (unsigned i = 0u; i < 9u; ++i)
-        click(2u);
-    CHECK(view()->hours == 96u && shown == 345600u);
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_DRY && view()->remaining_s == 345600u && heater && fan);
-    started = now;
+    CHECK(shown == 28800u);
+    choose_hours(96u);
+    click(1u);
+    click(1u);
+    uint32_t started = now;
+    CHECK(view()->remaining_s == 345600u);
     for (unsigned hour = 1u; hour < 96u; ++hour) {
         task(started + hour * 3600000u);
         CHECK(view()->mode == MODE_DRY && view()->remaining_s == (96u - hour) * 3600u);
     }
     task(started + 345599000u);
-    CHECK(view()->mode == MODE_DRY && view()->remaining_s == 1u);
+    CHECK(view()->remaining_s == 1u);
     task(started + 345600000u);
     CHECK(view()->mode == MODE_OFF && !heater && !fan && !light);
+    reset_at(0u);
+    enter_custom();
+    click(1u);
+    choose_hours(1u);
+    click(1u);
+    click(1u);
+    task(now + 3600000u);
+    CHECK(view()->mode == MODE_OFF && persisted.remaining_s == 0u && persisted.powered_off);
 }
-static void test_power_restore_and_stopped_state(void) {
-    uint32_t checkpoint;
+static void test_power_restore_and_pending_browse(void) {
     ++scenarios;
     reset_at(0u);
-    next_setting_or_start();
-    click(2u);
-    next_setting_or_start();
-    click(2u);
-    next_setting_or_start();
-    CHECK(view()->target_c == 45u && view()->hours == 8u && persisted.running && saves == 2u);
+    start_45_96_30();
     task(now + 60000u);
-    checkpoint = view()->remaining_s;
-    CHECK(persisted.remaining_s == checkpoint && saves == 3u);
-    task(now + 30000u);
-    memset(contacts, 0, sizeof contacts);
-    now = 0u;
-    controller_init(now);
-    CHECK(view()->mode == MODE_VIEW && !heater && !fan);
-    task(0u);
-    CHECK(view()->mode == MODE_DRY && heater && fan && view()->remaining_s == checkpoint);
-    CHECK(view()->target_c == 45u && view()->hours == 8u && saves == 3u);
-    uint32_t press = now + 10u;
-    contacts[0] = true;
-    task(press);
-    task(press + 30u);
-    task(press + 2030u);
-    CHECK(view()->mode == MODE_OFF && !persisted.running);
-    memset(contacts, 0, sizeof contacts);
+    uint32_t checkpoint = persisted.remaining_s;
+    healthy = false;
     now = 0u;
     controller_init(now);
     task(0u);
-    CHECK(view()->mode == MODE_OFF && !heater && !fan && !light);
-    CHECK(view()->target_c == 40u && view()->hours == 6u && view()->remaining_s == 21600u &&
-          persisted.remaining_s == 21600u && persisted.powered_off && !persisted.running);
-}
-static void test_restore_wait_fault_and_save_failure(void) {
-    ++scenarios;
+    click(1u); /* Browsing does not cancel automatic resume. */
+    CHECK(view()->mode == MODE_VIEW && view()->menu == MENU_PROFILE && persisted.running);
+    healthy = true;
+    task(now + 250u);
+    CHECK(view()->mode == MODE_DRY && view()->menu == MENU_PROFILE && heater && fan);
+    CHECK(view()->remaining_s == checkpoint && fan_percent == 30u);
+    click(1u);
+    CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY);
     reset_at(0u);
     start();
     healthy = false;
     now = 0u;
     controller_init(now);
-    task(0u);
-    CHECK(view()->mode == MODE_VIEW && !heater);
     task(4999u);
     CHECK(!heater);
-    healthy = true;
     task(5000u);
-    CHECK(view()->mode == MODE_DRY && heater);
-    reset_at(0u);
-    start();
-    healthy = false;
-    now = 0u;
-    controller_init(now);
-    task(5000u);
-    CHECK(view()->mode == MODE_FAULT && view()->error == 1u && !persisted.running && !heater);
+    CHECK(view()->mode == MODE_FAULT && view()->error == 1u && !persisted.running);
+}
+static void test_storage_failures_do_not_apply_drafts(void) {
+    ++scenarios;
     reset_at(0u);
     save_ok = false;
-    next_setting_or_start();
-    next_setting_or_start();
-    next_setting_or_start();
+    choose_profile(1u);
     CHECK(view()->mode == MODE_FAULT && view()->error == 5u && !heater);
+    CHECK(view()->target_c == 40u && view()->hours == 6u);
+    reset_at(0u);
+    start_45_96_30();
+    save_ok = false;
+    choose_profile(1u);
+    CHECK(view()->mode == MODE_FAULT && view()->error == 5u && !heater && !fan);
+    CHECK(view()->target_c == 45u && view()->hours == 96u && view()->fan_percent == 30u);
+    CHECK(!persisted.running);
     reset_at(0u);
     start();
     save_ok = false;
     task(now + 60000u);
     CHECK(view()->mode == MODE_FAULT && view()->error == 5u && !persisted.running && !heater);
-    reset_at(0u);
-    start();
-    next_setting_or_start();
-    CHECK(!persisted.running && !heater);
-    now = 0u;
-    controller_init(now);
-    task(0u);
-    CHECK(view()->mode == MODE_VIEW && !heater);
 }
-static void test_error_led_and_power_view(void) {
+static void test_errors_and_signals(void) {
     ++scenarios;
     reset_at(0u);
     start();
+    CHECK(error_signals == 0u);
     primary_fault = true;
     uint32_t at = now + 1u;
     task(at);
-    CHECK(leds[0] && heater && fan);
+    CHECK(error_signals == 1u && leds[0] && heater && fan);
     task(at + 499u);
     CHECK(leds[0]);
     task(at + 500u);
     CHECK(!leds[0] && heater && fan);
     task(at + 1000u);
-    CHECK(leds[0]);
+    CHECK(leds[0] && error_signals == 1u);
     click(0u);
-    at = now;
-    uint32_t remaining = view()->remaining_s;
     CHECK(screen == SCREEN_ERROR && shown == 6u && view()->mode == MODE_DRY);
-    task(at + 4999u);
-    CHECK(screen == SCREEN_ERROR && shown == 6u && heater);
-    task(at + 5000u);
+    uint32_t remaining = view()->remaining_s;
+    task(now + 5000u);
     CHECK(screen != SCREEN_ERROR && view()->remaining_s == remaining - 5u && heater);
     primary_fault = false;
     task(now + 1u);
     CHECK(leds[0]);
-    click(0u);
-    CHECK(screen == SCREEN_ERROR && shown == 0u && heater);
-    /* A later fatal fault replaces the open E0 view and cannot be dismissed
-     * or restarted by the diagnostic POWER press. */
-    adc_good = false;
     primary_fault = true;
+    task(now + 1u);
+    CHECK(error_signals == 2u);
+    click(0u);
+    adc_good = false;
     task(now + 250u);
-    CHECK(view()->mode == MODE_FAULT && view()->error == 2u && !heater && shown == 2u);
+    CHECK(view()->mode == MODE_FAULT && shown == 2u && error_signals == 3u);
     click(0u);
-    CHECK(shown == 6u && view()->mode == MODE_FAULT);
+    CHECK(shown == 6u && !heater);
     click(0u);
-    CHECK(shown == 2u && view()->mode == MODE_FAULT);
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_FAULT && !heater);
-    task(now + 5000u);
-    CHECK(screen != SCREEN_ERROR && view()->mode == MODE_FAULT && !heater);
+    CHECK(shown == 2u);
     adc_good = true;
     primary_fault = false;
     task(now + 250u);
     click(0u);
-    CHECK(shown == 2u && view()->mode == MODE_FAULT); /* Latched trip remains. */
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_TEMP && !heater);
-    next_setting_or_start();
-    next_setting_or_start();
-    CHECK(view()->mode == MODE_DRY && heater && view()->error == 0u);
-    /* Blink/view deadlines remain valid across the millisecond wrap. */
+    CHECK(shown == 2u && view()->mode == MODE_FAULT); /* Latched trip. */
+    click(1u);
+    CHECK(view()->menu == MENU_PROFILE && view()->mode == MODE_FAULT && !heater);
+    click(1u);
+    CHECK(view()->mode == MODE_FAULT && view()->error == 2u);
+    choose_profile(1u);
+    CHECK(view()->mode == MODE_DRY && view()->error == 0u && heater);
     reset_at(0xFFFFFF00u);
     primary_fault = true;
     task(now + 1u);
@@ -580,84 +608,97 @@ static void test_error_led_and_power_view(void) {
     task(now + 5000u);
     CHECK(screen != SCREEN_ERROR);
 }
-static void test_fan_menu_and_resume(void) {
+static void test_display_rotation_and_stable_leds(void) {
     ++scenarios;
     reset_at(0u);
-    CHECK(error_signals == 0u); /* No false NTC alarm before the first ADC. */
-    click(1u);
-    click(1u);
-    click(1u);
-    CHECK(view()->mode == MODE_FAN && shown == 100u && !heater && !fan);
-    for (unsigned percent = 10u; percent <= 100u; percent += 10u) {
-        click(2u);
-        CHECK(screen == SCREEN_FAN && shown == percent && !heater && !fan);
-    }
-    click(2u);
-    click(2u);
-    click(2u);
-    CHECK(shown == 30u);
-    click(1u);
-    CHECK(view()->mode == MODE_DRY && fan_percent == 30u && persisted.fan_percent == 30u);
-    task(now + 60000u);
-    CHECK(persisted.fan_percent == 30u && persisted.running);
-    controller_init(0u);
-    task(0u);
-    CHECK(view()->mode == MODE_DRY && fan_percent == 30u);
-    click(1u);
-    click(1u);
-    click(1u);
-    CHECK(view()->mode == MODE_FAN && shown == 30u && !fan);
-    click(2u);
-    task(now + 5000u);
-    CHECK(view()->mode == MODE_DRY && fan_percent == 40u);
-    reset_at(0u);
-    click(1u);
-    click(1u);
-    click(1u);
-    task(now + 5000u);
-    CHECK(view()->mode == MODE_VIEW && !fan && !heater); /* Abandoned unchanged page. */
-}
-static void test_error_signal_edges(void) {
-    ++scenarios;
-    reset_at(0u);
+    unsigned changes = led_changes[0];
+    uint32_t at = now;
+    for (unsigned i = 1u; i <= 1000u; ++i)
+        task(at + i);
+    CHECK(led_changes[0] == changes && !leds[1] && !leds[2]);
     start();
-    CHECK(error_signals == 0u);
-    primary_fault = true;
-    task(now + 1u);
-    CHECK(error_signals == 1u && heater);
-    for (unsigned i = 0u; i < 20u; ++i)
-        task(now + 500u);
+    task(now + 4000u);
+    CHECK(screen == SCREEN_TIME);
+    task(now + 4000u);
+    CHECK(screen == SCREEN_T_RH);
+    click(1u);
+    changes = led_changes[1];
+    at = now;
+    for (unsigned i = 1u; i <= 1000u; ++i)
+        task(at + i);
+    CHECK(led_changes[0] == 1u && leds[1] && led_changes[1] == changes);
+    CHECK(screen == SCREEN_PROFILE && heater);
     click(0u);
+    CHECK(screen == SCREEN_ERROR && shown == 0u && heater);
+    task(now + 5000u);
+    CHECK(screen == SCREEN_PROFILE && view()->menu == MENU_PROFILE && heater);
+    task(now + 5000u);
+    CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY);
+}
+static void test_target_view_is_read_only_and_expires(void) {
+    ++scenarios;
+    reset_at(0xFFFFFF00u);
+    unsigned saved = saves;
+    uint32_t at = now + 10u;
+    contacts[2] = true;
+    task(at);
+    task(at + 30u);
+    CHECK(screen == SCREEN_TEMP && shown == 40u && view()->menu == MENU_NONE);
+    contacts[2] = false;
+    task(at + 80u);
+    task(at + 110u);
+    task(at + 5029u);
+    CHECK(screen == SCREEN_TEMP && shown == 40u && saves == saved && !heater);
+    task(at + 5030u);
+    CHECK(screen == SCREEN_T_RH && view()->mode == MODE_VIEW && saves == saved);
+    choose_profile(7u); /* PLA: target 45 C, active fan 100%. */
+    task(now + 4000u);
+    CHECK(screen == SCREEN_TIME);
+    uint32_t remaining = view()->remaining_s;
+    click(2u);
+    CHECK(screen == SCREEN_TEMP && shown == 45u && heater && fan);
+    CHECK(view()->menu == MENU_NONE && view()->target_c == 45u);
+    task(now + 4000u);
+    CHECK(screen == SCREEN_TEMP && shown == 45u && view()->remaining_s < remaining);
+    click(2u); /* Repeated UP renews the five-second view. */
+    task(now + 4000u);
+    CHECK(screen == SCREEN_TEMP && shown == 45u && heater);
+    task(now + 1000u);
+    CHECK(screen == SCREEN_TIME && view()->mode == MODE_DRY && heater);
+    click(2u);
     click(0u);
-    CHECK(error_signals == 1u); /* Blink, LCD and viewing cannot retrigger sound. */
-    primary_fault = false;
+    CHECK(screen == SCREEN_ERROR && shown == 0u && heater);
+    click(2u);
+    CHECK(screen == SCREEN_TEMP && shown == 45u && heater);
+    click(1u);
+    CHECK(screen == SCREEN_PROFILE && !strcmp(shown_name, "CUSt") && heater);
+    click(2u);
+    CHECK(!strcmp(shown_name, "AbS")); /* UP still browses inside the menu. */
+    click(1u);
+    healthy = false;
     task(now + 1u);
-    CHECK(error_signals == 1u);
-    primary_fault = true;
-    task(now + 1u);
-    CHECK(error_signals == 2u); /* A cleared error can form a new episode. */
-    adc_good = false;
-    task(now + 250u);
-    CHECK(error_signals == 3u && !heater && !fan);
-    task(now + 10000u);
-    CHECK(error_signals == 3u);
+    CHECK(view()->mode == MODE_FAULT && !heater && !fan);
+    click(2u);
+    CHECK(screen == SCREEN_TEMP && shown == 45u && view()->mode == MODE_FAULT);
+    CHECK(!persisted.running); /* Viewing a target cannot clear a trip. */
+    hold(0u);
+    CHECK(view()->mode == MODE_OFF && !light && view()->target_c == 40u);
 }
 int main(void) {
-    test_fan_menu_and_resume();
-    test_error_signal_edges();
-    test_menu();
-    test_temperature_and_cutoff();
-    test_plate_hysteresis_and_faults();
-    test_off_wake_and_boot_hold();
-    test_timer_pause_expiry_and_wrap();
-    test_menu_timeout_and_bounce();
-    test_held_menu_and_fault_latch();
-    test_leds_do_not_flicker();
-    test_time_presets_and_partial_hour();
-    test_96_hour_countdown_and_wrap();
-    test_power_restore_and_stopped_state();
-    test_restore_wait_fault_and_save_failure();
-    test_error_led_and_power_view();
+    test_target_view_is_read_only_and_expires();
+    test_profiles_order_and_cancel();
+    test_all_preset_starts();
+    test_custom_drafts_and_all_values();
+    test_running_browse_and_edit_are_passive();
+    test_timeout_never_starts();
+    test_hold_debounce_and_boot_keys();
+    test_temperature_plate_and_faults();
+    test_off_wake_and_draft_reset();
+    test_partial_hours_and_long_countdown();
+    test_power_restore_and_pending_browse();
+    test_storage_failures_do_not_apply_drafts();
+    test_errors_and_signals();
+    test_display_rotation_and_stable_leds();
     printf("controller: %u scenarios, %u checks passed\n", scenarios, checks);
     return 0;
 }

@@ -76,6 +76,21 @@ class ReadbackTools(unittest.TestCase):
         with self.assertRaises(ValueError):
             readback.verify(self.write('full.bin', self.full), self.application)
 
+    def test_duration_codes_keep_legacy_and_append_short_hours(self):
+        # Independent fixture order: the existing ten codes must never move.
+        for index, hours in enumerate([6, 8, 10, 12, 18, 24, 32, 48, 72, 96, 1, 2, 3, 4, 5]):
+            packed = hours * 3600 | 70 << 19 | index << 26 | 1 << 30
+            words = struct.pack('<3I', 0x31524853, 4, packed)
+            self.full[0x7000:0x7014] = words + struct.pack('<2I', zlib.crc32(words), 0xFFFFFFFF)
+            result = readback.verify(self.write('duration.bin', self.full), self.application)
+            self.assertEqual(result['latest_cycle']['hours'], hours)
+            self.assertEqual(result['latest_cycle']['remaining_s'], hours * 3600)
+        packed = 3600 | 70 << 19 | 15 << 26 | 1 << 30
+        words = struct.pack('<3I', 0x31524853, 4, packed)
+        self.full[0x7000:0x7014] = words + struct.pack('<2I', zlib.crc32(words), 0xFFFFFFFF)
+        with self.assertRaisesRegex(ValueError, 'duration'):
+            readback.verify(self.write('unknown-duration.bin', self.full), self.application)
+
     def test_untouched_region(self):
         baseline = self.write('before.bin', self.full)
         self.full[0x5000] ^= 1

@@ -239,7 +239,78 @@ static void test_powered_off_and_interrupted_save(void) {
     CHECK(storage_load(&loaded) && !loaded.running && !loaded.powered_off &&
           loaded.remaining_s == 12310u);
 }
+
+static void test_duration_compatibility(void) {
+    static const uint8_t old_hours[] = {6u, 8u, 10u, 12u, 18u, 24u, 32u, 48u, 72u, 96u};
+    /* Literal SHR1 records with independently computed CRCs from 1.4.1,
+     * not produced by this firmware's duration encoder. */
+    static const uint32_t records[][5] = {
+        {0x31524853u, 1u, 0x42085460u, 0x1422EF98u, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x46087080u, 0xFA748485u, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x4A088CA0u, 0xEF2EED24u, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x4E08A8C0u, 0xEC213002u, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x5208FD20u, 0x4428C12Eu, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x56095180u, 0xC7578977u, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x5A09C200u, 0xDCED75CEu, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x5E0AA300u, 0xB9B84303u, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x620BF480u, 0x0B6680CBu, 0xFFFFFFFFu},
+        {0x31524853u, 1u, 0x660D4600u, 0x71D27F11u, 0xFFFFFFFFu},
+    };
+    storage_cycle_t loaded;
+    for (unsigned i = 0u; i < sizeof old_hours; ++i) {
+        reset();
+        memcpy(flash + SH01_JOURNAL_BASE, records[i], sizeof records[i]);
+        storage_init();
+        CHECK(storage_load(&loaded) && loaded.hours == old_hours[i] && loaded.running);
+        CHECK(loaded.remaining_s == (uint32_t)old_hours[i] * 3600u && loaded.fan_percent == 100u);
+        CHECK(storage_save(&loaded));
+        CHECK((flash_hal_read(SH01_JOURNAL_BASE + 20u + 8u) >> 26 & 15u) == i);
+    }
+    for (unsigned h = 1u; h <= 5u; ++h)
+        for (unsigned fan = 10u; fan <= 100u; fan += 10u) {
+            reset();
+            storage_cycle_t c = {(uint32_t)h * 3600u, 70u, (uint8_t)h, true, (uint8_t)fan, false};
+            CHECK(storage_save(&c));
+            CHECK((flash_hal_read(SH01_JOURNAL_BASE + 8u) >> 26 & 15u) == h + 9u);
+            storage_init();
+            CHECK(storage_load(&loaded) && loaded.hours == h && loaded.running);
+            CHECK(loaded.remaining_s == c.remaining_s && loaded.fan_percent == fan);
+            ++c.remaining_s;
+            CHECK(!storage_save(&c));
+        }
+}
+static void test_interrupted_short_profile_replacement(void) {
+    storage_cycle_t c = cycle(345600u), loaded;
+    reset();
+    CHECK(storage_save(&c));
+    memcpy(snapshot, flash, sizeof flash);
+    for (unsigned h = 1u; h <= 5u; ++h)
+        for (unsigned mode = 0u; mode < 3u; ++mode)
+            for (unsigned step = 1u; step <= 4u; ++step) {
+                memcpy(flash, snapshot, sizeof flash);
+                storage_init();
+                operations = 0u;
+                cut_at = step;
+                cut_mode = mode;
+                if (setjmp(power_cut) == 0) {
+                    c = (storage_cycle_t){(uint32_t)h * 3600u, 70u, (uint8_t)h, true, 100u, false};
+                    (void)storage_save(&c);
+                }
+                cut_at = 0u;
+                storage_init();
+                CHECK(storage_load(&loaded) && loaded.running);
+                /* Restore one complete cycle, never a blend of old and new. */
+                if (loaded.hours == 96u)
+                    CHECK(loaded.target_c == 65u && loaded.remaining_s == 345600u);
+                else
+                    CHECK(loaded.hours == h && loaded.target_c == 70u &&
+                          loaded.remaining_s == (uint32_t)h * 3600u && loaded.fan_percent == 100u);
+            }
+}
+
 int main(void) {
+    test_duration_compatibility();
+    test_interrupted_short_profile_replacement();
     test_powered_off_and_interrupted_save();
     test_fan_settings_and_legacy();
     test_roundtrip_and_rotation();

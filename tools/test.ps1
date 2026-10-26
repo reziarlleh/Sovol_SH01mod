@@ -10,6 +10,7 @@ foreach ($suite in @('actuators', 'controller', 'sensor', 'dual_sensor', 'sensor
     $test = Join-Path $root "tests\test_$suite.c"
     $sources = @((Join-Path $root "src\$suite.c"))
     if ($suite -eq 'resume') { $sources = @((Join-Path $root 'src\controller.c'), (Join-Path $root 'src\storage.c')) }
+    if ($suite -in @('controller', 'resume')) { $sources += (Join-Path $root 'src\profiles.c') }
     if ($suite -in @('dual_sensor', 'sensor_timing')) { $sources = @((Join-Path $root 'src\sensor.c')) }
     $exe = Join-Path $output "test_$suite.exe"
     & $Compiler -std=c11 -O1 -g -Wall -Wextra -Werror ('-I' + (Join-Path $root 'src')) $test @sources -o $exe

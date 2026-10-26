@@ -1,8 +1,12 @@
-# Прошивка 1.4.1 через FT232
+# Прошивка через FT232
 
 Инструкция для заводской платы **G24_V2.1 / HC32F005C6PA**. ROM-загрузчик использует
 UART на выводах, подписанных SWDIO/SWDCK; здесь это не протокол SWD.
-Файлы релиза: [v1.4.1](https://github.com/reziarlleh/Sovol_SH01mod/releases/tag/v1.4.1).
+Стабильный аппаратно подтверждённый релиз:
+[v1.4.1](https://github.com/reziarlleh/Sovol_SH01mod/releases/tag/v1.4.1).
+Текущие исходники main собирают **1.5.0**, пока без записи и аппаратной приёмки.
+Порядок подключения и проверки общий; примеры явного HEX/readback ниже относятся
+к 1.5.0. Для стабильного комплекта используйте его файлы версии 1.4.1.
 
 ## Комплект и подключение
 
@@ -74,12 +78,17 @@ backup не требуется: ранее сохранённый оригина
 По умолчанию берётся HEX версии из `src/config.h`. Для явного выбора:
 
 ```powershell
-.\tools\flash.ps1 -ComPort COM4 -HexFile .\build\v1.4.1\sovol_sh01mod_v1_4_1.hex
+.\tools\flash.ps1 -ComPort COM4 -HexFile .\build\v1.5.0\sovol_sh01mod_v1_5_0.hex
 ```
 
 Применяется **Page Erase**, Blank Check, Program, Verify. Журнал `0x7000..0x7FFF`
 не входит в образ и не стирается. Не используйте Chip Erase для обычного обновления.
-Для 1.4.1 записываются 13132 байта, 26 страниц; ожидаемый Verify — **0x787F**.
+| Версия | Байт | Страниц | Ожидаемый Verify |
+|---|---:|---:|---|
+| 1.4.1, подтверждена | 13132 | 26 | 0x787F |
+| 1.5.0, запись ещё не выполнена | 13400 | 27 | 0xAB35 |
+
+Для 1.5.0 это вычисленная сумма образа, а не результат физической записи.
 Скрипт требует свежие Program success и Verify match с правильной суммой;
 одного кода завершения 0 недостаточно. Сессия сохраняется в `hardware-local/isp-sessions/`.
 
@@ -99,11 +108,11 @@ Execute. Не запускайте одновременно GUI и CLI. Испо
 .\tools\open_programmer.ps1 -ComPort COM4 -Readback
 ```
 
-Нажмите Upload и сохраните новый полный образ как `hardware-local/after-1.4.1.hex`.
+Нажмите Upload и сохраните новый полный образ как `hardware-local/after-1.5.0.hex`.
 Это контроль результата записи, а не повторный заводской backup.
 
 ```powershell
-python .\tools\verify_readback.py .\hardware-local\after-1.4.1.hex --application .\build\v1.4.1\sovol_sh01mod_v1_4_1.hex --report .\hardware-local\after-1.4.1-check.json
+python .\tools\verify_readback.py .\hardware-local\after-1.5.0.hex --application .\build\v1.5.0\sovol_sh01mod_v1_5_0.hex --report .\hardware-local\after-1.5.0-check.json
 ```
 
 Утилита проверяет покрытие всех 32768 байт, совпадение приложения, FF в хвосте

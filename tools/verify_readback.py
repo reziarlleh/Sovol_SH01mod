@@ -9,7 +9,7 @@ import zlib
 
 FLASH = 32768
 JOURNAL = 0x7000
-PRESETS = [6, 8, 10, 12, 18, 24, 32, 48, 72, 96]
+PRESETS = [6, 8, 10, 12, 18, 24, 32, 48, 72, 96, 1, 2, 3, 4, 5]  # Stored codes; keep old order.
 
 
 def require(condition, message):

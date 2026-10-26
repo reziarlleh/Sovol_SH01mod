@@ -73,6 +73,7 @@ $applicationSources = @(
     'src\bus.c',
     'src\sensor.c',
     'src\lcd.c',
+    'src\profiles.c',
     'src\controller.c',
     'src\storage.c',
     'src\flash_hal.c'

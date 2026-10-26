@@ -5,15 +5,16 @@
 typedef enum {
     MODE_OFF,
     MODE_VIEW,
-    MODE_TEMP,
-    MODE_TIME,
-    MODE_FAN,
     MODE_DRY,
     MODE_FAULT
-} factory_mode_t;
+} controller_mode_t;
+
+/* UI is an overlay: browsing/editing cannot pause or change the active cycle. */
+typedef enum { MENU_NONE, MENU_PROFILE, MENU_TEMP, MENU_TIME, MENU_FAN } controller_menu_t;
 typedef struct {
-    factory_mode_t mode;
-    uint8_t target_c, hours, error, fan_percent;
+    controller_mode_t mode;
+    controller_menu_t menu;
+    uint8_t target_c, hours, error, fan_percent, profile;
     uint32_t remaining_s;
     bool heater, fan, time_screen;
 } controller_state_t;

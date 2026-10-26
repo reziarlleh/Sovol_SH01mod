@@ -1,14 +1,17 @@
 #ifndef SH01_CONFIG_H
 #define SH01_CONFIG_H
-#define FW_VERSION "1.4.1"
+#define FW_VERSION "1.5.0"
 #define SH01_FAN_START_MS 500u
 #define SH01_TEMP_MIN_C 40u
 #define SH01_TEMP_MAX_C 70u
 #define SH01_TEMP_STEP_C 5u
 #define SH01_CHAMBER_FAULT_X10 730
-#define SH01_TIME_MIN_H 6u
+#define SH01_TIME_MIN_H 1u
+#define SH01_TIME_DEFAULT_H 6u
 #define SH01_TIME_MAX_H 96u
-#define SH01_TIME_PRESET_VALUES 6u, 8u, 10u, 12u, 18u, 24u, 32u, 48u, 72u, 96u
+#define SH01_TIME_PRESET_VALUES 1u, 2u, 3u, 4u, 5u, 6u, 8u, 10u, 12u, 18u, 24u, 32u, 48u, 72u, 96u
+/* Append new codes: never renumber the durations already stored by 1.1--1.4.1. */
+#define SH01_TIME_STORAGE_VALUES 6u, 8u, 10u, 12u, 18u, 24u, 32u, 48u, 72u, 96u, 1u, 2u, 3u, 4u, 5u
 #define SH01_CHECKPOINT_MS 60000ul
 #define SH01_RESUME_WAIT_MS 5000ul
 #define SH01_JOURNAL_BASE 0x7000ul
@@ -19,6 +22,7 @@
 #define SH01_MENU_TIMEOUT_MS 5000ul
 #define SH01_SCREEN_INTERVAL_MS 4000ul
 #define SH01_ERROR_VIEW_MS 5000ul
+#define SH01_TARGET_VIEW_MS 5000ul
 #define SH01_ERROR_BLINK_MS 500ul
 #define SH01_SENSOR_CONFIRM_FRAMES 3u
 #define SH01_SENSOR_RETRY_MS 20ul

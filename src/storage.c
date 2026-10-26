@@ -11,7 +11,8 @@
 #define SLOT_COUNT (SLOTS_PER_PAGE * SH01_JOURNAL_PAGES)
 #define RECORD_MAGIC 0x31524853u /* SHR1: persistent format 1 */
 #define NO_SLOT UINT32_MAX
-static const uint8_t presets[] = {SH01_TIME_PRESET_VALUES};
+static const uint8_t presets[] = {SH01_TIME_STORAGE_VALUES};
+_Static_assert(sizeof presets <= 16u, "Duration index has only four bits");
 static uint32_t latest_slot, sequence;
 static storage_cycle_t saved;
 

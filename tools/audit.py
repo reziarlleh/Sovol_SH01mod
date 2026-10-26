@@ -84,15 +84,14 @@ def audit():
     required = {"controller_task", "sensor_task", "bus_read", "bus_write",
                 "lcd_temperature_humidity", "lcd_time", "hal_adc", "hal_clock_ok", "hal_heater",
                 "storage_init", "storage_save", "storage_disarm", "Flash_WriteWord", "Flash_SectorErase",
-                "sensor_overheated", "sensor_primary_fault", "lcd_fan_percent",
+                "sensor_overheated", "sensor_primary_fault", "lcd_fan_percent", "lcd_profile", "profile_get",
                 "actuators_tick_1ms", "actuators_error_signal", "actuators_fan",
                 "hal_fan_percent", "hal_tone_drive", "Bt_Run", "Bt_ARRSet"}
     require("firmware_version" in symbols and (VERSION + "\0").encode() in raw, "Embedded version missing")
     require(required <= symbols.keys(), "SH01 modules missing")
     forbidden = {"delay10us", "delay100us", "delay1ms"}
     require(not forbidden & symbols.keys(), "Destructive clock delay included")
-    require(not any(name.startswith("profile_") for name in symbols) and
-            "Flash_ChipErase" not in symbols, "Unexpected profiles/chip erase included")
+    require("Flash_ChipErase" not in symbols, "Unexpected chip erase included")
     linker_map = paths["map"].read_text(encoding="utf-8")
     sources = sorted((ROOT / "src").glob("*.[ch]"))
     for path in sources:
@@ -102,13 +101,23 @@ def audit():
                      for p in sources}
     config = (ROOT / "src/config.h").read_text(encoding="utf-8")
     for key, value in (("TEMP_MAX_C", "70u"), ("CHAMBER_FAULT_X10", "730"),
-                       ("TIME_MIN_H", "6u"), ("TIME_MAX_H", "96u")):
+                       ("TIME_MIN_H", "1u"), ("TIME_DEFAULT_H", "6u"), ("TIME_MAX_H", "96u")):
         require(re.search(r"^#define SH01_" + key + r"\s+" + value + r"$", config, re.M),
                 f"SH01 config mismatch: {key}")
-    presets = [6, 8, 10, 12, 18, 24, 32, 48, 72, 96]
+    presets = [1, 2, 3, 4, 5, 6, 8, 10, 12, 18, 24, 32, 48, 72, 96]
     preset_address = symbols["time_presets_h"][0]
     require(raw[preset_address:preset_address+len(presets)] == bytes(presets),
             "Compiled duration presets differ from the requested list")
+    stored_presets = [6, 8, 10, 12, 18, 24, 32, 48, 72, 96, 1, 2, 3, 4, 5]
+    address = symbols["presets"][0]
+    require(raw[address:address+len(stored_presets)] == bytes(stored_presets),
+            "Journal duration codes changed incompatibly")
+    profiles = [("CUSt", 0, 0), ("AbS", 70, 6), ("ASA", 70, 8), ("HIPS", 70, 3),
+                ("PA12", 70, 4), ("PCtG", 65, 8), ("PEtG", 60, 6), ("PLA", 45, 6), ("TPU", 60, 6)]
+    table = b"".join(name.encode().ljust(5, b"\0") + bytes([temp, hours])
+                     for name, temp, hours in profiles)
+    address = symbols["profiles"][0]
+    require(raw[address:address+len(table)] == table, "Compiled profile order/settings mismatch")
     result = {
         "ok": True, "version": VERSION, "editable_c_source": True,
         "oem_binary_required_for_build": False, "application_bytes": len(raw),
@@ -123,6 +132,7 @@ def audit():
         "primary_transaction_excludes_reserve": True,
         "reserve_after_confirmed_primary_failure": True,
         "error_view_ms": 5000, "power_error_blink_half_period_ms": 500,
+        "target_view_ms": 5000,
         "fan_percent": {"minimum": 10, "maximum": 100, "step": 10,
                         "pwm_hz": 100, "start_boost_ms": 500},
         "error_sound": {"frequencies_hz": [1000, 2000], "tone_ms": 150,
@@ -130,6 +140,10 @@ def audit():
         "artifact_audit_only": True,
         "journal_base": "0x7000", "journal_bytes": 4096,
         "duration_presets_h": presets,
+        "journal_duration_codes_h": stored_presets,
+        "profiles": [dict(name=n, target_c=t, hours=h) for n, t, h in profiles],
+        "preset_fan_percent": 100,
+        "mode_hold_ms": 2000,
         "device_acceptance_reference": "docs/STATUS_RU.md",
         "artifacts": {ext: {"bytes": p.stat().st_size,
                             "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
