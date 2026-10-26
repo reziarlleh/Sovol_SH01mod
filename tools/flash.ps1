@@ -202,7 +202,7 @@ try {
         Write-Host 'Dry run: XHSC.exe was not started.'
         Write-Host "Command: `"$tempProgrammer`" $operationText"
         Write-Host "Prepared configuration is retained: $tempConfigPath"
-        return
+        return [pscustomobject]@{ SessionRoot = $sessionRoot; Programmer = $tempProgrammer; WorkingDirectory = $workDir; ConfigPath = $tempConfigPath }
     }
 
     $logPath = Join-Path $workDir 'log.txt'

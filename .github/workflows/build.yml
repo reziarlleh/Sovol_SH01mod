@@ -1,6 +1,7 @@
 name: Build and test
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -37,6 +38,8 @@ jobs:
         run: .\tools\prepare_host_tests.ps1
       - name: Run nine C suites including blocking sensor timing
         run: .\tools\test.ps1
+      - name: Verify offline readback utilities
+        run: python -m unittest discover -s tests -p test_readback_tools.py
       - name: Audit ARM artifacts
         run: python .\tools\audit.py
       - name: Verify reproducible HEX and BIN

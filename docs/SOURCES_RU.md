@@ -35,3 +35,9 @@
 - [Официальный драйвер SHT4x Sensirion](https://github.com/Sensirion/embedded-sht/blob/master/sht4x/sht4x.c)
   — сравнение последовательности write → wait → read, serial и CRC. Проверено
   2026-10-26 при расследовании E6. Код приложения самостоятельно исправлен по протоколу.
+
+- [Вентиляция 5015, AdvenDrew на Thangs](https://thangs.com/designer/AdvenDrew/3d-model/5015%20Blower%20Upgrade%20for%202-Spool%20Filament%20Dryer%20%28SOVOL%2FComgrow%29-1093262)
+  — рекомендованная ссылка владельца; описание установки и изменений корпуса
+  просмотрено 2026-10-26. Модель не копируется в репозиторий; условия автора сохраняются.
+- [Sensirion SHT40](https://sensirion.com/products/catalog/SHT40) — внешний I²C-датчик
+  температуры/влажности; в проекте питание и логика 3,3 V.

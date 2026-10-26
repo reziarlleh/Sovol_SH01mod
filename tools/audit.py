@@ -127,10 +127,10 @@ def audit():
                         "pwm_hz": 100, "start_boost_ms": 500},
         "error_sound": {"frequencies_hz": [1000, 2000], "tone_ms": 150,
                         "gap_ms": 50, "repeats_while_error_persists": False},
-        "flashed_this_version": False,
+        "artifact_audit_only": True,
         "journal_base": "0x7000", "journal_bytes": 4096,
         "duration_presets_h": presets,
-        "hardware_functional_acceptance": False, "thermal_acceptance": False,
+        "device_acceptance_reference": "docs/STATUS_RU.md",
         "artifacts": {ext: {"bytes": p.stat().st_size,
                             "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
                       for ext, p in paths.items()},
