@@ -44,7 +44,7 @@ if (-not $ProgrammerOnly) {
     }
 }
 if ($IncludeProgrammer) {
-    $isp = Get-Package 'XHSC_ISP_V2.23.zip' 729856 '2f729500a72fce0e6eacf5be018c2489419bd2cc0623c02a196837bb441501ae' 'https://github.com/reziarlleh/Sovol_SH01mod/releases/download/v1.4.1/XHSC_ISP_V2.23.zip'
+    $isp = Get-Package 'XHSC_ISP_V2.23.zip' 729856 '2f729500a72fce0e6eacf5be018c2489419bd2cc0623c02a196837bb441501ae' 'https://github.com/reziarlleh/Sovol_SH01mod/releases/download/v1.5.0/XHSC_ISP_V2.23.zip'
     $ispDir = Join-Path $downloads 'XHSC_ISP_V2.23'
     if (-not $VerifyOnly -and -not (Test-Path -LiteralPath (Join-Path $ispDir 'XHSC ISP/XHSC.exe'))) {
         if (Test-Path -LiteralPath $ispDir) { throw "Incomplete programmer directory: $ispDir" }
