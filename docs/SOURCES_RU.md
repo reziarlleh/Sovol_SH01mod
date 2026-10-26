@@ -26,3 +26,7 @@
 - [Sensirion SHT4x, datasheet v7.3](https://sensirion.com/resource/datasheet/sht4x)
   — адреса 0x44/0x45/0x46, команды 0x94/0x89/0xFD, ожидание измерения,
   CRC и перевод сырых значений в температуру/влажность. Протокол проверен 2026-10-26.
+
+- [Официальный драйвер SHT4x Sensirion](https://github.com/Sensirion/embedded-sht/blob/master/sht4x/sht4x.c)
+  — сравнение последовательности write → wait → read, serial и CRC. Проверено
+  2026-10-26 при расследовании E6. Код приложения самостоятельно исправлен по протоколу.

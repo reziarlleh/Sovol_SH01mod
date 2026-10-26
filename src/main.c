@@ -36,11 +36,10 @@ int32_t main(void) {
     lcd_init();
     controller_init(hal_millis());
     for (;;) {
-        uint32_t now = hal_millis();
         if (!hal_clock_ok())
             failed();
         Wdt_Feed();
-        sensor_task(now);
-        controller_task(now);
+        sensor_task(hal_millis());
+        controller_task(hal_millis());
     }
 }

@@ -11,6 +11,7 @@ static bool aht_present, sht_present, serial_bad, t_crc_bad, rh_crc_bad, read_na
 static int primary_t10, reserve_t10;
 static uint16_t raw_humidity, raw_temperature;
 static bool use_raw_temperature;
+uint32_t hal_millis(void) { return now; }
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -128,7 +129,7 @@ int main(void) {
         run(800u);
         CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X);
         CHECK(sensor_get()->temperature_x10 == 250 && sensor_get()->humidity_x10 == 450u);
-        CHECK(serials == 1u && resets == 1u && measurements == 1u && aht_frames == 0u);
+        CHECK(serials == 1u && resets == 0u && measurements == 1u && aht_frames == 0u);
         CHECK(!sensor_overheated(now));
         CHECK(!sensor_primary_fault(now));
     }
@@ -158,10 +159,11 @@ int main(void) {
         run(800u);
         t_crc_bad = crc == 0u;
         rh_crc_bad = crc == 1u;
-        run(1500u);
-        CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X && sensor_primary_fault(now));
+        next_result();
+        CHECK(sensor_ok(now) && sensor_source() == SENSOR_SHT4X && !sensor_primary_fault(now));
         CHECK(sensor_get()->temperature_x10 == 250);
-        run(2200u);
+        CHECK(aht_frames == 0u);
+        run(1500u);
         CHECK(sensor_ok(now) && sensor_source() == SENSOR_AHT20);
         t_crc_bad = rh_crc_bad = false;
         run(3500u);
@@ -238,7 +240,7 @@ int main(void) {
     CHECK(aht_frames == reserve_reads); /* Healthy primary never polls reserve. */
     t_crc_bad = true;
     next_result();
-    CHECK(sensor_source() == SENSOR_SHT4X && sensor_primary_fault(now));
+    CHECK(sensor_source() == SENSOR_SHT4X && !sensor_primary_fault(now));
     t_crc_bad = false;
     next_result();
     CHECK(sensor_source() == SENSOR_SHT4X && !sensor_primary_fault(now));

@@ -6,6 +6,7 @@
 static unsigned checks, init_count, trigger_count, frames, recoveries, unsupported;
 static uint32_t now, init_at, trigger_at;
 static bool nack, always_busy, bad_frame, calibration_stuck, calibrated = true;
+uint32_t hal_millis(void) { return now; }
 #define CHECK(x)                                                                                   \
     do {                                                                                           \
         ++checks;                                                                                  \
@@ -96,7 +97,7 @@ int main(void) {
     reset(0u);
     nack = true;
     run(0u, 1100u);
-    CHECK(!sensor_ok(now) && sensor_get()->failures == 2u);
+    CHECK(!sensor_ok(now) && sensor_get()->failures == 1u);
     nack = false;
     run(1101u, 1900u);
     CHECK(sensor_ok(now));
