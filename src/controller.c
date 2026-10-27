@@ -175,8 +175,8 @@ static void begin_drying(uint8_t target, uint8_t hours, uint32_t seconds, uint8_
         dirty = true;
     }
 }
-/* POWER and M distinguish a release from a 2s hold. A held M must not first
- * execute its short action (which would close the selected profile).
+/* POWER and M distinguish a release from a 1.5s hold. A held M must not first
+ * execute its short action (which would advance the current CUSt page).
  * UP acts once on a debounced press; boot-held keys must be released first. */
 static unsigned key_event(unsigned id, uint32_t now) {
     key_t *k = &keys[id];
@@ -222,8 +222,8 @@ static void mode_key(bool held, uint32_t now) {
         open_profiles();
     } else if (state.menu == MENU_PROFILE) {
         if (!held)
-            close_menu(now);
-        else if (state.profile == 0u) {
+            return;
+        if (state.profile == 0u) {
             edit_target = state.target_c;
             edit_hours = state.hours;
             edit_seconds = state.remaining_s ? state.remaining_s : (uint32_t)edit_hours * 3600u;
@@ -233,13 +233,15 @@ static void mode_key(bool held, uint32_t now) {
             const drying_profile_t *p = profile_get(state.profile);
             begin_drying(p->target_c, p->hours, (uint32_t)p->hours * 3600u, 100u, now);
         }
-    } else if (!held) {
+    } else if (held)
+        begin_drying(edit_target, edit_hours, edit_seconds, edit_fan, now);
+    else {
         if (state.menu == MENU_TEMP)
             state.menu = MENU_TIME;
         else if (state.menu == MENU_TIME)
             state.menu = MENU_FAN;
         else if (state.menu == MENU_FAN)
-            begin_drying(edit_target, edit_hours, edit_seconds, edit_fan, now);
+            state.menu = MENU_TEMP;
     }
 }
 static void key_action(unsigned key, bool held, uint32_t now) {
@@ -253,7 +255,11 @@ static void key_action(unsigned key, bool held, uint32_t now) {
     last_edit = now;
     if (key == 0u) {
         target_view = false;
-        show_error(now);
+        if (state.menu != MENU_NONE) {
+            error_view = false;
+            close_menu(now);
+        } else
+            show_error(now);
     } else if (key == 1u) {
         target_view = false;
         error_view = false;

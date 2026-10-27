@@ -168,10 +168,10 @@ static void hold(unsigned key) {
     contacts[key] = true;
     task(at);
     task(at + 30u);
-    task(at + 2030u);
+    task(at + 1530u);
     contacts[key] = false;
-    task(at + 2050u);
-    task(at + 2080u);
+    task(at + 1550u);
+    task(at + 1580u);
 }
 static void enter_custom(void) {
     click(1u);
@@ -187,9 +187,7 @@ static void choose_hours(unsigned hours) {
 }
 static void start(void) {
     enter_custom();
-    click(1u);
-    click(1u);
-    click(1u);
+    hold(1u);
     CHECK(view()->mode == MODE_DRY && view()->menu == MENU_NONE);
 }
 static void start_45_96_30(void) {
@@ -201,7 +199,7 @@ static void start_45_96_30(void) {
     click(2u);
     click(2u);
     click(2u);
-    click(1u);
+    hold(1u);
     CHECK(view()->mode == MODE_DRY && view()->target_c == 45u && view()->hours == 96u &&
           view()->fan_percent == 30u && heater && fan);
 }
@@ -224,13 +222,17 @@ static void test_profiles_order_and_cancel(void) {
         CHECK(screen == SCREEN_PROFILE && !strcmp(shown_name, names[i]));
         CHECK(view()->profile == i && view()->mode == MODE_VIEW && saves == saved);
         CHECK(!heater && !fan && persisted.target_c == 40u && persisted.hours == 6u);
+        click(1u); /* Short M keeps this selection; UP alone browses. */
+        CHECK(view()->menu == MENU_PROFILE && view()->profile == i && saves == saved);
         click(2u);
     }
     CHECK(!strcmp(shown_name, "CUSt") && view()->profile == 0u);
     click(2u);
-    click(1u); /* A short M cancels rather than launching AbS. */
+    click(1u);
+    CHECK(view()->menu == MENU_PROFILE && view()->profile == 1u && !heater);
+    click(0u); /* POWER cancels the selection without showing diagnostics. */
     CHECK(view()->menu == MENU_NONE && view()->mode == MODE_VIEW && !heater && !fan);
-    CHECK(saves == saved && view()->remaining_s == 21600u);
+    CHECK(saves == saved && view()->remaining_s == 21600u && screen != SCREEN_ERROR);
     click(1u);
     CHECK(!strcmp(shown_name, "CUSt") && view()->profile == 0u);
     CHECK(!strcmp(profile_get(255u)->name, "CUSt"));
@@ -288,6 +290,12 @@ static void test_custom_drafts_and_all_values(void) {
     click(2u);
     CHECK(shown == 30u && persisted.target_c == 40u && !persisted.running);
     click(1u);
+    CHECK(view()->menu == MENU_TEMP && shown == 45u && saves == 1u);
+    click(1u);
+    CHECK(view()->menu == MENU_TIME && shown == 3600u);
+    click(1u);
+    CHECK(view()->menu == MENU_FAN && shown == 30u);
+    hold(1u);
     CHECK(view()->mode == MODE_DRY && view()->menu == MENU_NONE);
     CHECK(view()->target_c == 45u && view()->hours == 1u && view()->remaining_s == 3600u);
     CHECK(fan_percent == 30u && persisted.running && persisted.target_c == 45u &&
@@ -306,7 +314,7 @@ static void test_running_browse_and_edit_are_passive(void) {
     CHECK(view()->mode == MODE_DRY && heater && fan && fan_percent == 30u);
     CHECK(view()->target_c == 45u && view()->hours == 96u && saves == saved && persisted.running);
     CHECK(view()->remaining_s == remaining - 3u && view()->menu == MENU_PROFILE);
-    click(1u);
+    click(0u);
     CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY && heater && fan);
     enter_custom();
     click(2u); /* Draft 50 C must not alter the active 45 C controller. */
@@ -351,9 +359,9 @@ static void test_hold_debounce_and_boot_keys(void) {
     contacts[1] = true;
     task(at);
     task(at + 30u);
-    task(at + 2029u);
+    task(at + 1529u);
     CHECK(view()->menu == MENU_PROFILE && view()->mode == MODE_VIEW && !heater);
-    task(at + 2030u);
+    task(at + 1530u);
     CHECK(view()->mode == MODE_DRY && view()->menu == MENU_NONE && heater);
     task(at + 7000u); /* A held M is one action, not repeated starts. */
     CHECK(saves == 2u && view()->menu == MENU_NONE);
@@ -369,9 +377,11 @@ static void test_hold_debounce_and_boot_keys(void) {
     task(at);
     task(at + 30u);
     contacts[1] = false;
-    task(at + 2029u); /* Released one ms before the hold threshold. */
-    task(at + 2059u);
-    CHECK(view()->menu == MENU_NONE && !heater && !persisted.running);
+    task(at + 1529u); /* Released one ms before the hold threshold. */
+    task(at + 1559u);
+    CHECK(view()->menu == MENU_PROFILE && view()->profile == 1u && !heater && !persisted.running);
+    click(0u);
+    CHECK(view()->menu == MENU_NONE && screen != SCREEN_ERROR);
     reset_at(0u);
     at = now;
     for (unsigned i = 0u; i < 20u; ++i) {
@@ -394,7 +404,7 @@ static void test_hold_debounce_and_boot_keys(void) {
     hold(1u);
     CHECK(view()->menu == MENU_TEMP);
     hold(1u);
-    CHECK(view()->menu == MENU_TEMP && !heater); /* Long M does not advance CUSt pages. */
+    CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY && heater); /* Long M starts from TEMP. */
 }
 static void test_temperature_plate_and_faults(void) {
     ++scenarios;
@@ -486,8 +496,7 @@ static void test_partial_hours_and_long_countdown(void) {
     click(2u);
     CHECK(shown == 28800u);
     choose_hours(96u);
-    click(1u);
-    click(1u);
+    hold(1u);
     uint32_t started = now;
     CHECK(view()->remaining_s == 345600u);
     for (unsigned hour = 1u; hour < 96u; ++hour) {
@@ -502,8 +511,7 @@ static void test_partial_hours_and_long_countdown(void) {
     enter_custom();
     click(1u);
     choose_hours(1u);
-    click(1u);
-    click(1u);
+    hold(1u);
     task(now + 3600000u);
     CHECK(view()->mode == MODE_OFF && persisted.remaining_s == 0u && persisted.powered_off);
 }
@@ -523,7 +531,7 @@ static void test_power_restore_and_pending_browse(void) {
     task(now + 250u);
     CHECK(view()->mode == MODE_DRY && view()->menu == MENU_PROFILE && heater && fan);
     CHECK(view()->remaining_s == checkpoint && fan_percent == 30u);
-    click(1u);
+    click(0u);
     CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY);
     reset_at(0u);
     start();
@@ -596,8 +604,8 @@ static void test_errors_and_signals(void) {
     CHECK(shown == 2u && view()->mode == MODE_FAULT); /* Latched trip. */
     click(1u);
     CHECK(view()->menu == MENU_PROFILE && view()->mode == MODE_FAULT && !heater);
-    click(1u);
-    CHECK(view()->mode == MODE_FAULT && view()->error == 2u);
+    click(0u);
+    CHECK(view()->menu == MENU_NONE && view()->mode == MODE_FAULT && view()->error == 2u);
     choose_profile(1u);
     CHECK(view()->mode == MODE_DRY && view()->error == 0u && heater);
     reset_at(0xFFFFFF00u);
@@ -629,9 +637,12 @@ static void test_display_rotation_and_stable_leds(void) {
     CHECK(led_changes[0] == 1u && leds[1] && led_changes[1] == changes);
     CHECK(screen == SCREEN_PROFILE && heater);
     click(0u);
+    CHECK(screen == SCREEN_T_RH && view()->menu == MENU_NONE && heater);
+    click(0u); /* Only a second POWER on main opens diagnostics. */
     CHECK(screen == SCREEN_ERROR && shown == 0u && heater);
     task(now + 5000u);
-    CHECK(screen == SCREEN_PROFILE && view()->menu == MENU_PROFILE && heater);
+    CHECK(screen != SCREEN_ERROR && view()->menu == MENU_NONE && heater);
+    click(1u);
     task(now + 5000u);
     CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY);
 }
@@ -674,7 +685,7 @@ static void test_target_view_is_read_only_and_expires(void) {
     CHECK(screen == SCREEN_PROFILE && !strcmp(shown_name, "CUSt") && heater);
     click(2u);
     CHECK(!strcmp(shown_name, "AbS")); /* UP still browses inside the menu. */
-    click(1u);
+    click(0u);
     healthy = false;
     task(now + 1u);
     CHECK(view()->mode == MODE_FAULT && !heater && !fan);
@@ -684,7 +695,92 @@ static void test_target_view_is_read_only_and_expires(void) {
     hold(0u);
     CHECK(view()->mode == MODE_OFF && !light && view()->target_c == 40u);
 }
+
+static void test_custom_start_from_any_parameter(void) {
+    ++scenarios;
+    for (unsigned page = 0u; page < 3u; ++page) {
+        reset_at(0u);
+        enter_custom();
+        click(2u); /* 45 C */
+        click(1u);
+        choose_hours(1u);
+        click(1u);
+        click(2u);
+        click(2u);
+        click(2u); /* 30% */
+        click(1u); /* FAN -> TEMP, preserving the whole draft. */
+        CHECK(view()->menu == MENU_TEMP && shown == 45u && saves == 1u);
+        for (unsigned i = 0u; i < page; ++i)
+            click(1u);
+        CHECK(view()->mode == MODE_VIEW && view()->target_c == 40u && !heater && !fan);
+        hold(1u);
+        CHECK(view()->menu == MENU_NONE && view()->mode == MODE_DRY && heater && fan);
+        CHECK(view()->target_c == 45u && view()->hours == 1u && fan_percent == 30u);
+        CHECK(view()->remaining_s == 3600u && saves == 2u && persisted.running);
+        task(now + 1000u);
+        CHECK(view()->menu == MENU_NONE && view()->remaining_s == 3599u && saves == 2u);
+    }
+}
+static void test_power_cancels_each_menu_without_applying(void) {
+    ++scenarios;
+    for (unsigned running = 0u; running < 2u; ++running)
+        for (unsigned page = 0u; page < 4u; ++page) {
+            reset_at(0u);
+            if (running)
+                start_45_96_30();
+            uint8_t target = view()->target_c, hours = view()->hours, speed = view()->fan_percent;
+            unsigned saved = saves;
+            uint32_t remaining = view()->remaining_s;
+            if (page == 0u)
+                click(1u);
+            else {
+                enter_custom();
+                click(2u); /* Draft target only. */
+                for (unsigned i = 1u; i < page; ++i)
+                    click(1u);
+            }
+            click(2u); /* Change selected profile or current draft parameter. */
+            click(0u);
+            CHECK(view()->menu == MENU_NONE && screen != SCREEN_ERROR);
+            CHECK(view()->mode == (running ? MODE_DRY : MODE_VIEW));
+            CHECK(view()->target_c == target && view()->hours == hours && view()->fan_percent == speed);
+            CHECK(saves == saved && persisted.running == (running != 0u));
+            CHECK(view()->remaining_s <= remaining && (running || view()->remaining_s == remaining));
+            CHECK(fan == (running != 0u) && (!running || fan_percent == speed));
+            click(0u);
+            CHECK(screen == SCREEN_ERROR && shown == 0u); /* POWER on main retains diagnostics. */
+            enter_custom();
+            CHECK(shown == target); /* Cancelled draft cannot leak into the next entry. */
+            click(0u);
+            CHECK(view()->menu == MENU_NONE && screen != SCREEN_ERROR);
+        }
+}
+static void test_power_hold_boundary_1500_ms(void) {
+    ++scenarios;
+    reset_at(0xFFFFFF00u);
+    start_45_96_30();
+    enter_custom();
+    click(2u);
+    uint32_t at = now + 10u;
+    contacts[0] = true;
+    task(at);
+    task(at + 30u);
+    task(at + 1529u);
+    CHECK(view()->mode == MODE_DRY && view()->menu == MENU_TEMP && heater && light);
+    task(at + 1530u);
+    CHECK(view()->mode == MODE_OFF && !heater && !fan && !light);
+    CHECK(view()->target_c == 40u && view()->hours == 6u && view()->fan_percent == 30u);
+    CHECK(persisted.powered_off && !persisted.running);
+    contacts[0] = false;
+    task(at + 1550u);
+    task(at + 1580u);
+    CHECK(view()->mode == MODE_OFF && !light); /* No short POWER wake on release. */
+}
+
 int main(void) {
+    test_custom_start_from_any_parameter();
+    test_power_cancels_each_menu_without_applying();
+    test_power_hold_boundary_1500_ms();
     test_target_view_is_read_only_and_expires();
     test_profiles_order_and_cancel();
     test_all_preset_starts();

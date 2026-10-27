@@ -123,10 +123,10 @@ static void hold(unsigned key) {
     keys[key] = true;
     tick(t);
     tick(t + 30u);
-    tick(t + 2030u);
+    tick(t + 1530u);
     keys[key] = false;
-    tick(t + 2050u);
-    tick(t + 2080u);
+    tick(t + 1550u);
+    tick(t + 1580u);
 }
 static void enter_custom(void) {
     press(1u);
@@ -148,7 +148,7 @@ static void test_checkpoint_off_and_fault(void) {
     press(2u);
     press(2u);
     press(2u);
-    press(1u);
+    hold(1u);
     CHECK(fan_percent == 30u);
     CHECK(heater && fan && controller_get()->hours == 96u && controller_get()->target_c == 45u);
     tick(now + 60000u);
@@ -180,9 +180,7 @@ static void test_checkpoint_off_and_fault(void) {
     CHECK(controller_get()->mode == MODE_VIEW && light && !heater && !fan);
     CHECK(storage_load(&loaded) && !loaded.powered_off && !loaded.running);
     enter_custom();
-    press(1u);
-    press(1u);
-    press(1u);
+    hold(1u);
     CHECK(heater && controller_get()->remaining_s == stopped);
     healthy = false;
     tick(now + 1u);
@@ -227,8 +225,7 @@ static void test_short_cycles_survive_checkpoint_and_reboot(void) {
         /* 6 -> ... -> 96 -> 1, then choose the required short duration. */
         for (unsigned i = 0u; i < 9u + hours; ++i)
             press(2u);
-        press(1u);
-        press(1u);
+        hold(1u);
         CHECK(controller_get()->mode == MODE_DRY && controller_get()->hours == hours);
         CHECK(controller_get()->remaining_s == (uint32_t)hours * 3600u);
         tick(now + 60000u);
@@ -252,7 +249,35 @@ static void test_short_cycles_survive_checkpoint_and_reboot(void) {
               controller_get()->hours == profile && fan_percent == 100u);
     }
 }
+
+static void test_power_cancel_restores_original_cycle(void) {
+    storage_cycle_t loaded;
+    for (unsigned page = 0u; page < 4u; ++page) {
+        memset(journal, 255, sizeof journal);
+        storage_init();
+        storage_cycle_t old = {20000u, 55u, 8u, true, 30u, false};
+        CHECK(storage_save(&old));
+        reboot();
+        press(1u);
+        if (page) {
+            hold(1u);
+            press(2u); /* Modified draft temperature. */
+            for (unsigned i = 1u; i < page; ++i)
+                press(1u);
+        }
+        press(2u);
+        press(0u); /* Cancel selection or any CUSt parameter. */
+        CHECK(controller_get()->menu == MENU_NONE && controller_get()->mode == MODE_DRY);
+        CHECK(storage_load(&loaded) && loaded.running && loaded.remaining_s == old.remaining_s);
+        CHECK(loaded.target_c == 55u && loaded.hours == 8u && loaded.fan_percent == 30u);
+        reboot();
+        CHECK(controller_get()->mode == MODE_DRY && controller_get()->remaining_s == 20000u);
+        CHECK(controller_get()->target_c == 55u && controller_get()->hours == 8u && fan_percent == 30u);
+    }
+}
+
 int main(void) {
+    test_power_cancel_restores_original_cycle();
     test_checkpoint_off_and_fault();
     test_power_cut_while_browsing_or_editing();
     test_short_cycles_survive_checkpoint_and_reboot();

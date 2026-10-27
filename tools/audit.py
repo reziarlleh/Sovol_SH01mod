@@ -101,7 +101,8 @@ def audit():
                      for p in sources}
     config = (ROOT / "src/config.h").read_text(encoding="utf-8")
     for key, value in (("TEMP_MAX_C", "70u"), ("CHAMBER_FAULT_X10", "730"),
-                       ("TIME_MIN_H", "1u"), ("TIME_DEFAULT_H", "6u"), ("TIME_MAX_H", "96u")):
+                       ("TIME_MIN_H", "1u"), ("TIME_DEFAULT_H", "6u"), ("TIME_MAX_H", "96u"),
+                       ("KEY_HOLD_MS", "1500ul")):
         require(re.search(r"^#define SH01_" + key + r"\s+" + value + r"$", config, re.M),
                 f"SH01 config mismatch: {key}")
     presets = [1, 2, 3, 4, 5, 6, 8, 10, 12, 18, 24, 32, 48, 72, 96]
@@ -143,7 +144,7 @@ def audit():
         "journal_duration_codes_h": stored_presets,
         "profiles": [dict(name=n, target_c=t, hours=h) for n, t, h in profiles],
         "preset_fan_percent": 100,
-        "mode_hold_ms": 2000,
+        "mode_hold_ms": 1500,
         "device_acceptance_reference": "docs/STATUS_RU.md",
         "artifacts": {ext: {"bytes": p.stat().st_size,
                             "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
